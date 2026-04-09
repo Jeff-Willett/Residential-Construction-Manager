@@ -1,6 +1,6 @@
 # Operations & Deployment Guide
 
-This document outlines the operational setup, deployment workflow, and troubleshooting steps for the **Residential Construction Gantt Manager**.
+This document outlines the operational setup, deployment workflow, and troubleshooting steps for the **Residential Construction Manager**.
 
 ## 🏗️ Architecture & Tech Stack
 
@@ -45,7 +45,7 @@ If the deployed website breaks or fails to update, here is how you can troublesh
 
 ### 1. Build Fails on Vercel
 - **Symptom**: You pushed code to GitHub, but the live site didn't update and you received an email from Vercel saying the build failed.
-- **Action**: Log into your [Vercel Dashboard](https://vercel.com/), find the "Residential Construction Gantt Manager" project, and click on the "Deployments" tab. Click on the failed deployment to view the build logs.
+- **Action**: Log into your [Vercel Dashboard](https://vercel.com/), find the "Residential Construction Manager" project, and click on the "Deployments" tab. Click on the failed deployment to view the build logs.
 - **Common Causes**: 
   - A TypeScript typing error. (Run `npm run build` locally inside the `app/` folder to see the exact error).
   - A missing dependency. (Ensure you ran `npm install <package-name>` inside the `app/` directory so it gets added to `app/package.json`).

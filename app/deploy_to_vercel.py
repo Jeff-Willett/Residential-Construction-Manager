@@ -16,7 +16,7 @@ def deploy():
         print("Error: VERCEL_TOKEN environment variable not set.")
         return
 
-    base_path = '/Volumes/Ext-APFSv350/GoogleDrive/PARA/01_Projects/Residential Construction Gantt Manager/app'
+    base_path = '/Volumes/Ext-APFSv350/GoogleDrive/PARA/01_Projects/Residential Construction Manager/app'
     files_to_deploy = []
 
     for root, dirs, files in os.walk(base_path):
@@ -49,7 +49,7 @@ def deploy():
     }
 
     payload = {
-        'name': 'residential-construction-gantt-manager',
+        'name': 'residential-construction-manager',
         'project': project_id,
         'files': files_to_deploy
     }

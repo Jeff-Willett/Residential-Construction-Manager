@@ -16,9 +16,9 @@ function App() {
         <header className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm sticky top-0 z-10">
           <div>
             <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-cyan-300">
-              Florida TNT
+              Residential Construction
             </h1>
-            <p className="text-sm text-slate-400">Residential Construction Gantt Manager</p>
+            <p className="text-sm text-slate-400">Manager</p>
           </div>
           <div className="flex items-center space-x-3">
              <button 

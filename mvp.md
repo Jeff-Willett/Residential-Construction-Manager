@@ -1,4 +1,4 @@
-Build a web-based "Residential Construction Gantt Manager" MVP using React, TypeScript, and Tailwind CSS. The goal is to move beyond static spreadsheets into a dynamic, dependency-aware scheduling engine.
+Build a web-based "Residential Construction Manager" MVP using React, TypeScript, and Tailwind CSS. The goal is to move beyond static spreadsheets into a dynamic, dependency-aware scheduling engine.
 
 ### 1. Core Logic Engine (CPM)
 
@@ -14,7 +14,7 @@ Build a web-based "Residential Construction Gantt Manager" MVP using React, Type
 
 [cite_start]Pre-load the system with the following project data[cite: 1, 3]:
 
-- **Project:** Florida TNT
+- **Project:** Residential Construction
 - **Starting Task:** "Estimate" (Sub: Willett & Assoc.) | Start: 2026-04-01 | [cite_start]Duration: 10 days[cite: 3, 4].
 - [cite_start]**Key Successors:** - "Clearing" (3 days) depends on Estimate[cite: 3].
   - [cite_start]"Site Prep" (2 days) depends on Clearing[cite: 4].
