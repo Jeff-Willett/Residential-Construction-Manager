@@ -77,7 +77,7 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
       <div className="flex flex-1 overflow-auto relative">
         {/* Left Side: Task Table */}
         <div className="w-64 flex-shrink-0 border-r border-slate-700 bg-slate-800/90 z-10 sticky left-0">
-          <div className="h-10 border-b border-slate-700 flex items-center px-4 text-xs font-medium text-slate-400">
+          <div className="h-[104px] border-b border-slate-700 flex items-end pb-2 px-4 text-xs font-semibold text-slate-400 uppercase tracking-wider">
             Task Name
           </div>
           <div className="py-2">
@@ -102,12 +102,12 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
           <div className="inline-flex min-w-full">
             <div className="flex flex-col w-full relative">
               {/* Month Header */}
-              <div className="flex border-b border-slate-700 h-8 bg-slate-900/40 text-slate-400">
+              <div className="flex border-b border-slate-700 h-8 bg-slate-900/60 text-slate-300">
                 {monthGroups.map((group, i) => (
                   <div 
                     key={i} 
                     style={{ width: group.days * colWidth }}
-                    className="flex-shrink-0 border-r border-slate-700/50 flex items-center px-4 text-[10px] font-bold uppercase tracking-widest sticky left-64 z-20 overflow-hidden"
+                    className="flex-shrink-0 border-r border-slate-700/50 flex items-center px-4 text-[10px] font-bold uppercase tracking-[0.2em] overflow-hidden whitespace-nowrap bg-slate-900/40"
                   >
                     {group.label}
                   </div>
@@ -115,14 +115,14 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
               </div>
 
               {/* Week Header */}
-              <div className="flex border-b border-slate-700 h-8 bg-slate-800/40 text-slate-400">
+              <div className="flex border-b border-slate-700 h-8 bg-slate-800/60 text-slate-400">
                 {weekGroups.map((group, i) => (
                   <div 
                     key={i} 
                     style={{ width: group.days * colWidth }}
-                    className="flex-shrink-0 border-r border-slate-700/50 flex items-center px-4 text-[9px] font-bold overflow-hidden"
+                    className="flex-shrink-0 border-r border-slate-700/50 flex items-center px-4 text-[9px] font-bold overflow-hidden whitespace-nowrap"
                   >
-                    {colWidth > 15 && group.label}
+                    {colWidth > 20 && group.label}
                   </div>
                 ))}
               </div>

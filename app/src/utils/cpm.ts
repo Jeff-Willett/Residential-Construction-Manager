@@ -6,13 +6,14 @@ import { addDays, isWeekend, format, parseISO } from 'date-fns';
  */
 export function getCalendarDateFromProjectDay(projectStartDate: string, projectDay: number): string {
   let currentDate = parseISO(projectStartDate);
-  let daysAdded = 1; // Project day 1 is the start date (if it's a weekday)
   
-  // Quick check if start date itself is weekend, push it to monday
+  // Project day 1 is the start date (if it's a weekday)
+  // Ensure we start on a weekday
   while (isWeekend(currentDate)) {
     currentDate = addDays(currentDate, 1);
   }
 
+  let daysAdded = 1;
   while (daysAdded < projectDay) {
     currentDate = addDays(currentDate, 1);
     if (!isWeekend(currentDate)) {
@@ -22,11 +23,54 @@ export function getCalendarDateFromProjectDay(projectStartDate: string, projectD
   return format(currentDate, 'yyyy-MM-dd');
 }
 
+/**
+ * Calculates number of working days between two dates (inclusive).
+ */
+export function getWorkingDaysCount(startDateStr: string, endDateStr: string): number {
+  let current = parseISO(startDateStr);
+  const end = parseISO(endDateStr);
+  if (end < current) return 0;
+
+  let count = 0;
+  while (current <= end) {
+    if (!isWeekend(current)) {
+      count++;
+    }
+    current = addDays(current, 1);
+  }
+  return count;
+}
+
+/**
+ * Finds the project day for a given calendar date.
+ */
+export function getProjectDayFromDate(projectStartDate: string, targetDateStr: string): number {
+  let start = parseISO(projectStartDate);
+  const target = parseISO(targetDateStr);
+  
+  while (isWeekend(start)) {
+    start = addDays(start, 1);
+  }
+  
+  if (target < start) return 1;
+
+  let projectDay = 1;
+  let current = start;
+  while (format(current, 'yyyy-MM-dd') !== format(target, 'yyyy-MM-dd') && current < target) {
+    current = addDays(current, 1);
+    if (!isWeekend(current)) {
+      projectDay++;
+    }
+  }
+  return projectDay;
+}
+
 export interface Task {
   id: string;
   name: string;
   subcontractor: string;
   duration: number; // in working days
+  lag: number; // working days offset from predecessors
   es: number; // Earliest Start (project day)
   ef: number;
   ls: number;
@@ -105,14 +149,14 @@ export function calculateCPM(tasks: Task[], dependencies: Dependency[]): Task[] 
     const preds = predecessors.get(id) || [];
     
     if (preds.length === 0) {
-      task.es = 1;
+      task.es = 1 + (task.lag || 0);
     } else {
       let maxEF = 0;
       for (const pId of preds) {
         const pTask = taskMap.get(pId)!;
         if (pTask.ef > maxEF) maxEF = pTask.ef;
       }
-      task.es = maxEF + 1;
+      task.es = maxEF + 1 + (task.lag || 0);
     }
     
     // Formula: EF = ES + Duration - 1

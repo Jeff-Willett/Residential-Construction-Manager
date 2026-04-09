@@ -28,11 +28,11 @@ export function DependencyLines({ tasks, dependencies, getCol, startDate, colWid
 
         // Start point: right edge of predecessor
         const startX = (pEndCol - 1) * colWidth;
-        const startY = pIndex * rowHeight + (rowHeight / 2);
+        const startY = pIndex * rowHeight + (rowHeight / 2) + 8; // +8 for py-2 padding
 
         // End point: left edge of successor
         const endX = (sStartCol - 1) * colWidth + 4; // offset for the pill
-        const endY = sIndex * rowHeight + (rowHeight / 2);
+        const endY = sIndex * rowHeight + (rowHeight / 2) + 8; // +8 for py-2 padding
 
         // Draw an elbow path
         const isCritical = pTask.isCritical && sTask.isCritical;
