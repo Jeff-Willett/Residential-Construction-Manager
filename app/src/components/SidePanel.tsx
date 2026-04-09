@@ -56,8 +56,6 @@ export function SidePanel({ task, onClose }: { task: Task, onClose: () => void }
       setStartInput(getCalendarDateFromProjectDay(projectStartDate, startDay));
     } else {
        // If no duration, maybe calculate duration?
-       const startDay = getProjectDayFromDate(projectStartDate, startInput);
-       const endDay = getProjectDayFromDate(projectStartDate, newEnd);
        const newDur = getWorkingDaysCount(startInput, newEnd);
        if (newDur > 0) setDurationInput(newDur.toString());
     }
