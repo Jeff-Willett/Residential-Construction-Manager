@@ -1,0 +1,6 @@
+{
+  "name": "residential-construction-gantt-manager",
+  "framework": "vite",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist"
+}
