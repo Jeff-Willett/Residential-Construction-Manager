@@ -5,7 +5,7 @@ import { clsx } from 'clsx';
 import { ZoomIn, ZoomOut, AlertTriangle, UserMinus } from 'lucide-react';
 
 export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: string) => void, selectedTaskId: string | null }) {
-  const { projects, tasks, deleteProject, vendorColors, activeFilters } = useProjectStore();
+  const { projects, tasks, vendorColors, activeFilters } = useProjectStore();
   const [colWidth, setColWidth] = useState(40);
 
   const visibleTasks = useMemo(() => {
@@ -129,7 +129,7 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
                            </span>
                        )}
                     </div>
-                    {(task.delay_days || 0) > 0 && <AlertTriangle size={12} className="text-red-500 flex-shrink-0 drop-shadow ml-1" title={`Delay: ${task.delay_days} days`} />}
+                    {(task.delay_days || 0) > 0 && <span title={`Delay: ${task.delay_days} days`} className="flex-shrink-0 drop-shadow ml-1"><AlertTriangle size={12} className="text-red-500" /></span>}
                   </div>
                 ))}
               </div>

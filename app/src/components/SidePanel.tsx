@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useProjectStore } from '../store/projectStore';
 import type { EngineTask } from '../utils/schedulingEngine';
-import { X, Clock, CalendarDays, AlertTriangle, Link } from 'lucide-react';
-import clsx from 'clsx';
+import { X, Clock, CalendarDays, AlertTriangle } from 'lucide-react';
 import { format, parseISO, isWeekend, addDays } from 'date-fns';
 
 function getWorkingDaysDiff(startStr: string, endStr: string): number {
@@ -36,7 +35,6 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
   const { updateTaskDuration, updateTaskLag, updateTaskSubcontractor, projects, tasks } = useProjectStore();
   
   const [durationInput, setDurationInput] = useState(task.duration.toString());
-  const [lagInput, setLagInput] = useState(task.lag.toString());
   const [vendorInput, setVendorInput] = useState(task.subcontractor || '');
   const [startDateStr, setStartDateStr] = useState(task.calculated_start || '');
   const [finishDateStr, setFinishDateStr] = useState(task.calculated_finish || '');
@@ -48,7 +46,6 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
   // Update local state if external task changes
   useEffect(() => {
     setDurationInput(task.duration.toString());
-    setLagInput(task.lag.toString());
     setVendorInput(task.subcontractor || '');
     setStartDateStr(task.calculated_start || '');
     setFinishDateStr(task.calculated_finish || '');
