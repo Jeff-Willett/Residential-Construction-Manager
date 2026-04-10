@@ -5,7 +5,7 @@ import { clsx } from 'clsx';
 import { ZoomIn, ZoomOut, AlertTriangle, UserMinus } from 'lucide-react';
 
 export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: string) => void, selectedTaskId: string | null }) {
-  const { projects, tasks, vendorColors, activeFilters } = useProjectStore();
+  const { projects, tasks, deleteProject, vendorColors, activeFilters } = useProjectStore();
   const [colWidth, setColWidth] = useState(40);
 
   const visibleTasks = useMemo(() => {

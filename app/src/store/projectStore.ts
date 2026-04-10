@@ -41,6 +41,7 @@ interface ProjectState {
   setVendorColor: (vendor: string, color: string) => Promise<void>;
   toggleFilter: (type: keyof ActiveFilters, value: string) => void;
   clearFilters: () => void;
+  deleteProject: (projectId: string) => Promise<void>;
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
