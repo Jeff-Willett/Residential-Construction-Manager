@@ -1,0 +1,174 @@
+import { addDays, isWeekend, format, parseISO } from 'date-fns';
+
+export function addWorkingDays(startDateStr: string, daysToAdd: number): string {
+  let currentDate = parseISO(startDateStr);
+  
+  while (isWeekend(currentDate)) {
+    currentDate = addDays(currentDate, 1);
+  }
+
+  // A 1-day task finishes on its start day (so we add 0 calendar jumps)
+  let daysAdded = 0;
+  while (daysAdded < daysToAdd - 1) {
+    currentDate = addDays(currentDate, 1);
+    if (!isWeekend(currentDate)) {
+      daysAdded++;
+    }
+  }
+  return format(currentDate, 'yyyy-MM-dd');
+}
+
+export function differenceInWorkingDays(startDateStr: string, endDateStr: string): number {
+    let current = parseISO(startDateStr);
+    const end = parseISO(endDateStr);
+    if (end < current) return 0;
+
+    let count = 0;
+    while (current <= end) {
+      if (!isWeekend(current)) {
+        count++;
+      }
+      current = addDays(current, 1);
+    }
+    return count;
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  start_date: string;
+}
+
+export interface EngineTask {
+  id: string;
+  project_id: string;
+  template_id: string | null;
+  name: string;
+  subcontractor: string | null;
+  bottleneck_vendor: string | null;
+  duration: number; // working days
+  lag: number; 
+  
+  // Calculated fields
+  logic_start?: string; // When dependencies are met
+  calculated_start?: string; // logic_start + resource wait if any
+  calculated_finish?: string; // calculated_start + duration
+  delay_days?: number; // difference in days between logic and calculated
+}
+
+export interface EngineDependency {
+  id: string;
+  predecessor_id: string;
+  successor_id: string;
+}
+
+export function calculateScheduleEngine(
+  projects: Project[], 
+  tasks: EngineTask[], 
+  dependencies: EngineDependency[]
+): EngineTask[] {
+  
+  // Track vendor busy dates globally across all projects
+  // Map of vendorName -> "yyyy-MM-dd" (the last day they are busy)
+  const vendorOccupancy = new Map<string, string>();
+
+  const taskMap = new Map<string, EngineTask>();
+  tasks.forEach(t => taskMap.set(t.id, { ...t }));
+  
+  const successors = new Map<string, string[]>();
+  const predecessors = new Map<string, string[]>();
+  
+  dependencies.forEach(dep => {
+    if (!successors.has(dep.predecessor_id)) successors.set(dep.predecessor_id, []);
+    if (!predecessors.has(dep.successor_id)) predecessors.set(dep.successor_id, []);
+    
+    successors.get(dep.predecessor_id)!.push(dep.successor_id);
+    predecessors.get(dep.successor_id)!.push(dep.predecessor_id);
+  });
+
+  const inDegree = new Map<string, number>();
+  tasks.forEach(t => inDegree.set(t.id, 0));
+  
+  dependencies.forEach(dep => {
+    inDegree.set(dep.successor_id, (inDegree.get(dep.successor_id) || 0) + 1);
+  });
+
+  const readyTasks: string[] = [];
+  inDegree.forEach((degree, id) => {
+    if (degree === 0) {
+      const t = taskMap.get(id)!;
+      const proj = projects.find(p => p.id === t.project_id);
+      t.logic_start = proj ? proj.start_date : format(new Date(), 'yyyy-MM-dd'); 
+      readyTasks.push(id);
+    }
+  });
+
+  const sortedIds: string[] = [];
+
+  while (readyTasks.length > 0) {
+    // Priority: Earliest logic_start. Tiebreaker: Earliest project start_date
+    readyTasks.sort((a,b) => {
+        const ta = taskMap.get(a)!;
+        const tb = taskMap.get(b)!;
+        const timeA = parseISO(ta.logic_start!).getTime();
+        const timeB = parseISO(tb.logic_start!).getTime();
+        if (timeA !== timeB) return timeA - timeB;
+        
+        const pa = projects.find(p => p.id === ta.project_id);
+        const pb = projects.find(p => p.id === tb.project_id);
+        const pTimeA = pa ? parseISO(pa.start_date).getTime() : 0;
+        const pTimeB = pb ? parseISO(pb.start_date).getTime() : 0;
+        return pTimeA - pTimeB;
+    });
+
+    const currId = readyTasks.shift()!;
+    sortedIds.push(currId);
+    const task = taskMap.get(currId)!;
+    
+    let actualStart = task.logic_start!;
+    
+    if (task.bottleneck_vendor) {
+        const vendorLastBusy = vendorOccupancy.get(task.bottleneck_vendor);
+        if (vendorLastBusy) {
+             const vendorAvailableDate = addWorkingDays(vendorLastBusy, 2); // 1 day after last busy
+             if (parseISO(vendorAvailableDate) > parseISO(actualStart)) {
+                 actualStart = vendorAvailableDate;
+             }
+        }
+    }
+    
+    task.calculated_start = actualStart;
+    task.calculated_finish = addWorkingDays(actualStart, task.duration);
+    
+    if (task.bottleneck_vendor) {
+        vendorOccupancy.set(task.bottleneck_vendor, task.calculated_finish);
+    }
+    
+    if (task.calculated_start === task.logic_start) {
+      task.delay_days = 0;
+    } else {
+      task.delay_days = differenceInWorkingDays(task.logic_start!, task.calculated_start) - 1; 
+    }
+
+    const succs = successors.get(currId) || [];
+    for (const succ of succs) {
+      inDegree.set(succ, (inDegree.get(succ)! - 1));
+      if (inDegree.get(succ) === 0) {
+          const sTask = taskMap.get(succ)!;
+          const sPreds = predecessors.get(succ) || [];
+          
+          let maxFinish = sTask.logic_start || '1970-01-01';
+          for (const p of sPreds) {
+             const preTask = taskMap.get(p)!;
+             if (parseISO(preTask.calculated_finish!) > parseISO(maxFinish)) {
+                 maxFinish = preTask.calculated_finish!;
+             }
+          }
+          sTask.logic_start = addWorkingDays(maxFinish, 2); 
+          readyTasks.push(succ);
+      }
+    }
+  }
+
+  return Array.from(taskMap.values());
+}

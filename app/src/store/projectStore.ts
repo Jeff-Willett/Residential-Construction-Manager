@@ -1,161 +1,209 @@
 import { create } from 'zustand';
-import { calculateCPM } from '../utils/cpm';
-import type { Task, Dependency } from '../utils/cpm';
+import { calculateScheduleEngine, type Project, type EngineTask, type EngineDependency } from '../utils/schedulingEngine';
 import { supabase } from '../lib/supabase';
 
+export interface TaskTemplate {
+  id: string;
+  task_order: number;
+  scope: string;
+  subcontractor: string | null;
+  default_days: number;
+  bottleneck_vendor: string | null;
+}
+
+export interface TemplateDependency {
+  id: string;
+  predecessor_id: string;
+  successor_id: string;
+}
+
 interface ProjectState {
-  projectStartDate: string;
-  tasks: Task[];
-  dependencies: Dependency[];
+  projects: Project[];
+  tasks: EngineTask[];
+  dependencies: EngineDependency[];
+  templates: TaskTemplate[];
+  templateDependencies: TemplateDependency[];
   isLoading: boolean;
   error: string | null;
+  vendorColors: Record<string, string>;
   
   fetchData: () => Promise<void>;
-  setProjectStartDate: (date: string) => void;
-  updateTaskDetails: (taskId: string, updates: Partial<Task>) => Promise<void>;
-  setDependenciesForTask: (taskId: string, predecessorIds: string[]) => Promise<void>;
-  addTask: (task: Omit<Task, 'es' | 'ef' | 'ls' | 'lf' | 'float' | 'isCritical' | 'id'>) => Promise<void>;
-  deleteTask: (taskId: string) => Promise<void>;
+  addProject: (name: string, startDate: string) => Promise<void>;
+  deleteProject: (projectId: string) => Promise<void>;
+  updateTaskDuration: (taskId: string, duration: number) => Promise<void>;
+  setVendorColor: (vendor: string, color: string) => Promise<void>;
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
-  projectStartDate: '2026-04-01',
-  tasks: [],
-  dependencies: [],
-  isLoading: true,
-  error: null,
+      projects: [],
+      tasks: [],
+      dependencies: [],
+      templates: [],
+      templateDependencies: [],
+      isLoading: true,
+      error: null,
+      vendorColors: {},
+
+      setVendorColor: async (vendor: string, color: string) => {
+        // Optimistic UI update
+        const updatedColors = { ...get().vendorColors };
+        if (color) {
+          updatedColors[vendor] = color;
+          set({ vendorColors: updatedColors });
+          await supabase.from('vendor_colors').upsert({ vendor_name: vendor, color }, { onConflict: 'vendor_name' });
+        } else {
+          delete updatedColors[vendor];
+          set({ vendorColors: updatedColors });
+          await supabase.from('vendor_colors').delete().eq('vendor_name', vendor);
+        }
+      },
 
   fetchData: async () => {
     set({ isLoading: true, error: null });
     try {
-      const { data: tasksData, error: tasksError } = await supabase.from('tasks').select('*');
-      if (tasksError) throw tasksError;
+      const [
+        { data: projectsData, error: projErr },
+        { data: tasksData, error: tasksErr },
+        { data: depsData, error: depsErr },
+        { data: tempData, error: tempErr },
+        { data: tempDepsData, error: tempDepsErr },
+        { data: vendorColorsData, error: vendorColorsErr }
+      ] = await Promise.all([
+        supabase.from('projects').select('*').order('start_date', { ascending: true }),
+        supabase.from('tasks').select('*'),
+        supabase.from('dependencies').select('*'),
+        supabase.from('task_templates').select('*').order('task_order', { ascending: true }),
+        supabase.from('template_dependencies').select('*'),
+        supabase.from('vendor_colors').select('*')
+      ]);
 
-      const { data: depsData, error: depsError } = await supabase.from('dependencies').select('*');
-      if (depsError) throw depsError;
+      if (projErr) throw projErr;
+      if (tasksErr) throw tasksErr;
+      if (depsErr) throw depsErr;
+      if (tempErr) throw tempErr;
+      if (tempDepsErr) throw tempDepsErr;
+      if (vendorColorsErr) console.error('Failed to fetch vendor colors:', vendorColorsErr);
 
-      const fetchedTasks: Task[] = (tasksData || []).map((t: any) => ({
+      const computedColors: Record<string, string> = {};
+      if (vendorColorsData) {
+         vendorColorsData.forEach(vc => {
+            computedColors[vc.vendor_name] = vc.color;
+         });
+      }
+
+      const projects = projectsData || [];
+      const templates = tempData || [];
+      const templateDependencies = tempDepsData || [];
+
+      const fetchedTasks: EngineTask[] = (tasksData || []).map((t: any) => ({
         id: t.id,
+        project_id: t.project_id,
+        template_id: t.template_id,
         name: t.name,
-        subcontractor: t.subcontractor || 'Unassigned',
+        subcontractor: t.subcontractor,
+        bottleneck_vendor: t.bottleneck_vendor,
         duration: t.duration || 1,
         lag: t.lag || 0,
-        es: 0, ef: 0, ls: 0, lf: 0, float: 0, isCritical: false
       }));
 
-      const fetchedDeps: Dependency[] = (depsData || []).map((d: any) => ({
+      const fetchedDeps: EngineDependency[] = (depsData || []).map((d: any) => ({
         id: d.id,
-        predecessorId: d.predecessor_id,
-        successorId: d.successor_id
+        predecessor_id: d.predecessor_id,
+        successor_id: d.successor_id
       }));
 
-      const recalculated = calculateCPM(fetchedTasks, fetchedDeps);
-      set({ tasks: recalculated, dependencies: fetchedDeps, isLoading: false });
+      // Apply Engine Logic
+      const recalculated = calculateScheduleEngine(projects, fetchedTasks, fetchedDeps);
+      set({ 
+        projects, 
+        tasks: recalculated, 
+        dependencies: fetchedDeps, 
+        templates, 
+        templateDependencies,
+        vendorColors: computedColors,
+        isLoading: false 
+      });
     } catch (err: any) {
       console.error('Error fetching data:', err);
       set({ error: err.message, isLoading: false });
     }
   },
 
-  setProjectStartDate: (date: string) => 
-    set(() => {
-      // Re-triggering components that listen to start date will automatically reflect changes.
-      return { projectStartDate: date };
-    }),
+  addProject: async (name: string, startDate: string) => {
+    const { templates, templateDependencies } = get();
+    // 1. Insert Project
+    const { data: projData, error: projErr } = await supabase
+      .from('projects')
+      .insert({ name, start_date: startDate })
+      .select()
+      .single();
 
-  updateTaskDetails: async (taskId: string, updates: Partial<Task>) => {
-    const dbUpdates: any = {};
-    if (updates.name !== undefined) dbUpdates.name = updates.name;
-    if (updates.subcontractor !== undefined) dbUpdates.subcontractor = updates.subcontractor;
-    if (updates.duration !== undefined) dbUpdates.duration = Math.max(1, updates.duration);
-    if (updates.lag !== undefined) dbUpdates.lag = updates.lag;
-
-    if (Object.keys(dbUpdates).length > 0) {
-      const { error } = await supabase.from('tasks').update(dbUpdates).eq('id', taskId);
-      if (error) {
-        console.error('Error updating task:', error);
-        return;
-      }
+    if (projErr || !projData) {
+      console.error('Failed to create project:', projErr);
+      return;
     }
 
-    set((state) => {
-      const updatedTasks = state.tasks.map(t => 
-        t.id === taskId ? { ...t, ...updates, duration: Math.max(1, updates.duration ?? t.duration) } : t
-      );
-      const recalculated = calculateCPM(updatedTasks, state.dependencies);
-      return { tasks: recalculated };
-    });
-  },
+    const projectId = projData.id;
 
-  setDependenciesForTask: async (taskId: string, predecessorIds: string[]) => {
-    // Note: Due to RLS or simple REST, we do two requests: delete old, insert new.
-    // In production a PostgreSQL function or batch might be better.
-    try {
-      // 1. Delete existing incoming dependencies to this task
-      const { error: delError } = await supabase.from('dependencies').delete().eq('successor_id', taskId);
-      if (delError) throw delError;
-
-      // 2. Insert new ones
-      if (predecessorIds.length > 0) {
-        const inserts = predecessorIds.map(predId => ({
-          predecessor_id: predId,
-          successor_id: taskId
-        }));
-        const { error: insError } = await supabase.from('dependencies').insert(inserts);
-        if (insError) throw insError;
-      }
-      
-      // Just re-fetch completely to get valid IDs
+    if (templates.length === 0) {
       await get().fetchData();
-
-    } catch (err) {
-      console.error('Error setting dependencies:', err);
-    }
-  },
-
-  addTask: async (taskInfo) => {
-    const { data, error } = await supabase.from('tasks').insert({
-      name: taskInfo.name,
-      subcontractor: taskInfo.subcontractor,
-      duration: taskInfo.duration,
-      lag: taskInfo.lag || 0
-    }).select().single();
-    
-    if (error) {
-      console.error('Error adding task:', error);
       return;
     }
 
-    set((state) => {
-      const newTask: Task = {
-        id: data.id,
-        name: data.name,
-        subcontractor: data.subcontractor || 'Unassigned',
-        duration: data.duration,
-        lag: data.lag || 0,
-        es: 0, ef: 0, ls: 0, lf: 0, float: 0, isCritical: false
-      };
-      const updatedTasks = [...state.tasks, newTask];
-      const recalculated = calculateCPM(updatedTasks, state.dependencies);
-      return { tasks: recalculated };
-    });
-  },
+    // 2. Insert Tasks from Templates
+    const taskInserts = templates.map(t => ({
+      project_id: projectId,
+      template_id: t.id,
+      name: t.scope,
+      subcontractor: t.subcontractor,
+      bottleneck_vendor: t.bottleneck_vendor,
+      duration: t.default_days,
+      lag: 0
+    }));
 
-  deleteTask: async (taskId: string) => {
-    const { error } = await supabase.from('tasks').delete().eq('id', taskId);
-    if (error) {
-      console.error('Error deleting task:', error);
+    const { data: insertedTasks, error: tasksErr } = await supabase
+      .from('tasks')
+      .insert(taskInserts)
+      .select();
+
+    if (tasksErr || !insertedTasks) {
+      console.error('Failed to insert tasks:', tasksErr);
       return;
     }
 
-    set((state) => {
-      const remainingTasks = state.tasks.filter(t => t.id !== taskId);
-      const remainingDeps = state.dependencies.filter(d => d.predecessorId !== taskId && d.successorId !== taskId);
-      const recalculated = calculateCPM(remainingTasks, remainingDeps);
-      return { 
-        tasks: [...recalculated], 
-        dependencies: [...remainingDeps] 
-      };
-    });
+    // 3. Insert Dependencies
+    // We must map template_id -> new task id
+    const templateToTaskMap = new Map<string, string>();
+    insertedTasks.forEach(t => templateToTaskMap.set(t.template_id, t.id));
+
+    const depInserts = templateDependencies.map(td => ({
+      predecessor_id: templateToTaskMap.get(td.predecessor_id)!,
+      successor_id: templateToTaskMap.get(td.successor_id)!
+    })).filter(d => d.predecessor_id && d.successor_id); // Ensure validity
+
+    if (depInserts.length > 0) {
+      const { error: depErr } = await supabase.from('dependencies').insert(depInserts);
+      if (depErr) console.error('Failed to insert dependencies:', depErr);
+    }
+
+    // Refresh everything to reflect changes
+    await get().fetchData();
+  },
+
+  deleteProject: async (projectId: string) => {
+    const { error } = await supabase.from('projects').delete().eq('id', projectId);
+    if (!error) {
+      await get().fetchData();
+    } else {
+      console.error('Failed to delete project', error);
+    }
+  },
+
+  updateTaskDuration: async (taskId: string, duration: number) => {
+    // Optimistic update logic could go here, but for simplicity we await db save so logic engine syncs
+    const { error } = await supabase.from('tasks').update({ duration: Math.max(1, duration) }).eq('id', taskId);
+    if (!error) {
+       await get().fetchData();
+    }
   }
 }));
