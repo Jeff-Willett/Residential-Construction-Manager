@@ -4,10 +4,10 @@ import { GanttChart } from './components/GanttChart';
 import { SidePanel } from './components/SidePanel';
 import { VendorColorModal } from './components/VendorColorModal';
 import { FilterModal } from './components/FilterModal';
-import { Settings, Filter } from 'lucide-react';
+import { Settings, Filter, RotateCcw, RotateCw } from 'lucide-react';
 
 function App() {
-  const { projects, tasks, isLoading, error, fetchData, activeFilters } = useProjectStore();
+  const { projects, tasks, isLoading, error, fetchData, activeFilters, undo, undoStack, redo, redoStack } = useProjectStore();
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
@@ -29,7 +29,7 @@ function App() {
             <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-cyan-300">
               Residential Construction
             </h1>
-            <p className="text-sm text-slate-400">Scheduling Engine & Gantt Manager</p>
+            <p className="text-sm text-slate-400">Residential Construction Manager</p>
           </div>
           <div className="flex items-center space-x-3">
              <button
@@ -44,13 +44,29 @@ function App() {
                  </span>
                )}
              </button>
-             <button
-               onClick={() => setIsSettingsOpen(true)}
-               className="p-2 bg-slate-800 hover:bg-slate-700 rounded-md border border-slate-700 shadow-sm transition-colors text-slate-300 hover:text-white"
-               title="Color Matrix Settings"
-             >
-               <Settings size={20} />
-             </button>
+              <button
+                onClick={() => setIsSettingsOpen(true)}
+                className="p-2 bg-slate-800 hover:bg-slate-700 rounded-md border border-slate-700 shadow-sm transition-colors text-slate-300 hover:text-white"
+                title="Color Matrix Settings"
+              >
+                <Settings size={20} />
+              </button>
+              <button
+                disabled={undoStack.length === 0 || isLoading}
+                onClick={undo}
+                className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed rounded-md border border-slate-700 shadow-sm transition-colors text-orange-400 hover:text-orange-300"
+                title={`Undo Change (${undoStack.length} available)`}
+              >
+                <RotateCcw size={20} />
+              </button>
+              <button
+                disabled={redoStack.length === 0 || isLoading}
+                onClick={redo}
+                className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed rounded-md border border-slate-700 shadow-sm transition-colors text-blue-400 hover:text-blue-300"
+                title={`Redo Change (${redoStack.length} available)`}
+              >
+                <RotateCw size={20} />
+              </button>
              <button 
                disabled={isLoading || !!error}
                onClick={() => {
@@ -68,8 +84,8 @@ function App() {
           </div>
         </header>
         
-        <main className="flex-1 overflow-auto p-6">
-          <div className="bg-slate-800/40 rounded-xl border border-slate-700/50 overflow-hidden shadow-2xl backdrop-blur-md">
+        <main className="flex-1 overflow-hidden p-6 flex flex-col">
+          <div className="flex-1 flex flex-col bg-slate-800/40 rounded-xl border border-slate-700/50 overflow-hidden shadow-2xl backdrop-blur-md">
             {isLoading ? (
               <div className="flex items-center justify-center p-12 text-slate-400">
                 <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">

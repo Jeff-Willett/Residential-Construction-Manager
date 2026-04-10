@@ -21,29 +21,37 @@ function getWorkingDaysDiff(startStr: string, endStr: string): number {
 }
 
 function addWorkingDaysLocal(startDateStr: string, daysToAdd: number): string {
-  let currentDate = parseISO(startDateStr);
-  while (isWeekend(currentDate)) currentDate = addDays(currentDate, 1);
-  let daysAdded = 0;
-  while (daysAdded < daysToAdd - 1) {
-    currentDate = addDays(currentDate, 1);
-    if (!isWeekend(currentDate)) daysAdded++;
+  try {
+    if (!startDateStr || startDateStr.length < 8) return '';
+    let currentDate = parseISO(startDateStr);
+    if (isNaN(currentDate.getTime())) return '';
+    
+    if (currentDate.getFullYear() < 2000) currentDate.setFullYear(2026);
+
+    while (isWeekend(currentDate)) currentDate = addDays(currentDate, 1);
+    let daysAdded = 0;
+    while (daysAdded < daysToAdd - 1) {
+      currentDate = addDays(currentDate, 1);
+      if (!isWeekend(currentDate)) daysAdded++;
+    }
+    return format(currentDate, 'yyyy-MM-dd');
+  } catch (e) {
+    console.error('Date error:', e);
+    return '';
   }
-  return format(currentDate, 'yyyy-MM-dd');
 }
 
 export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => void }) {
-  const { updateTaskDuration, updateTaskLag, updateTaskSubcontractor, projects, tasks } = useProjectStore();
+  const { updateTaskDuration, updateTaskLag, updateTaskSubcontractor, projects, tasks, dependencies } = useProjectStore();
   
   const [durationInput, setDurationInput] = useState(task.duration.toString());
   const [vendorInput, setVendorInput] = useState(task.subcontractor || '');
   const [startDateStr, setStartDateStr] = useState(task.calculated_start || '');
   const [finishDateStr, setFinishDateStr] = useState(task.calculated_finish || '');
 
-  // Extract unique subcontractors for dropdown
   const uniqueVendors = Array.from(new Set(tasks.map(t => t.subcontractor).filter(Boolean))) as string[];
   uniqueVendors.sort();
 
-  // Update local state if external task changes
   useEffect(() => {
     setDurationInput(task.duration.toString());
     setVendorInput(task.subcontractor || '');
@@ -82,14 +90,18 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
   const conflictTask = task.delay_cause_task_id ? tasks.find(t => t.id === task.delay_cause_task_id) : null;
   const conflictProject = conflictTask ? projects.find(p => p.id === conflictTask.project_id) : null;
 
+  const predIds = dependencies.filter(d => d.successor_id === task.id).map(d => d.predecessor_id);
+  const predecessors = tasks.filter(t => predIds.includes(t.id));
+  const latestPred = [...predecessors].sort((a,b) => (b.calculated_finish || '').localeCompare(a.calculated_finish || ''))[0];
+  const hasLogicConflict = (task.lag || 0) < 0 && latestPred;
+
   const handleSave = () => {
     const dur = parseInt(durationInput, 10);
-    
-    // Convert absolute Start Date visual string to engine Lag physics
     let finalLag = task.lag;
     if (startDateStr && startDateStr !== task.calculated_start) {
-        const dateDrift = getWorkingDaysDiff(task.calculated_start || '', startDateStr);
-        finalLag = Math.max(0, task.lag + dateDrift);
+        const baseDate = task.logic_start || task.calculated_start || '';
+        const dateDrift = getWorkingDaysDiff(baseDate, startDateStr);
+        finalLag = task.lag + dateDrift;
     }
     
     if (!isNaN(dur) && dur > 0 && dur !== task.duration) updateTaskDuration(task.id, dur);
@@ -97,10 +109,8 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
     if (vendorInput !== (task.subcontractor || '')) updateTaskSubcontractor(task.id, vendorInput || null, vendorInput || null);
   };
 
-
-
   return (
-    <div className="w-80 bg-slate-800 border-l border-slate-700/50 shadow-2xl flex flex-col relative z-20 transform transition-transform duration-300">
+    <div className="w-80 bg-slate-800 border-l border-slate-700/50 shadow-2xl flex flex-col relative z-20">
       <div className="p-4 border-b border-slate-700/80 flex items-center justify-between">
         <div>
            <h3 className="font-semibold text-lg text-slate-100">{task.name}</h3>
@@ -146,7 +156,7 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
                type="date"
                value={startDateStr}
                onChange={handleStartDateChange}
-               className="w-full bg-slate-800 border border-slate-700/80 rounded-md px-3 py-2 text-slate-200 focus:outline-none focus:border-green-500 transition-all cursor-pointer"
+               className="w-full bg-slate-800 border border-slate-700/80 rounded-md px-3 py-2 text-slate-200 focus:outline-none focus:border-green-500 transition-all"
             />
           </div>
           <div>
@@ -157,7 +167,7 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
                type="date"
                value={finishDateStr}
                onChange={handleFinishDateChange}
-               className="w-full bg-slate-800 border border-slate-700/80 rounded-md px-3 py-2 text-slate-200 focus:outline-none focus:border-orange-500 transition-all cursor-pointer"
+               className="w-full bg-slate-800 border border-slate-700/80 rounded-md px-3 py-2 text-slate-200 focus:outline-none focus:border-orange-500 transition-all"
             />
           </div>
         </div>
@@ -191,7 +201,6 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
                   </div>
                 </div>
                 
-                {/* Proposed Solutions */}
                 <div className="flex flex-col space-y-2 mt-2 pt-2 border-t border-red-500/20">
                    <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Engine Solutions</span>
                    <button 
@@ -205,6 +214,16 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
                      <span className="text-[10px] text-red-300/80 font-normal">Reassigns task</span>
                    </button>
                    
+                   <button 
+                     onClick={() => {
+                       updateTaskLag(task.id, (task.lag || 0) + (task.delay_days || 0));
+                     }}
+                     className="w-full text-xs font-bold py-1.5 px-3 bg-red-500/20 hover:bg-red-500/40 text-red-100 rounded transition border border-red-500/50 hover:border-red-400/80 shadow text-left flex justify-between items-center"
+                   >
+                     <span>2. Absorb Delay as Lag</span>
+                     <span className="text-[10px] text-red-300/80 font-normal">Locks current date</span>
+                   </button>
+
                    {conflictTask && (
                      <button 
                        onClick={() => {
@@ -213,7 +232,7 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
                        }}
                        className="w-full text-xs font-bold py-1.5 px-3 bg-slate-700/50 hover:bg-slate-600/70 text-slate-200 rounded transition border border-slate-600 shadow text-left flex justify-between items-center"
                      >
-                       <span>2. Squeeze Conflicting Task</span>
+                       <span>3. Squeeze Conflicting Task</span>
                        <span className="text-[10px] text-slate-400 font-normal">Cuts {task.delay_days}d from {conflictProject?.name || ''}</span>
                      </button>
                    )}
@@ -221,7 +240,50 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
              </div>
            )}
 
-           <div className="grid grid-cols-2 gap-2 text-sm">
+           {/* Logic Overlap Engine */}
+           {hasLogicConflict && (
+             <div className="mb-4 bg-orange-500/10 border border-orange-500/30 p-3 rounded-md flex flex-col space-y-3">
+                <div className="flex items-start space-x-2">
+                  <AlertTriangle size={16} className="text-orange-400 mt-0.5 flex-shrink-0" />
+                  <div>
+                     <span className="text-orange-400 font-bold text-sm tracking-wide uppercase block">Logic Overlap</span>
+                     <span className="text-slate-300 text-xs mt-1 block">
+                       This task is forced to start before its predecessor <span className="font-bold text-white">{latestPred.name}</span> is finished. 
+                       Predecessor finishes on <span className="font-bold text-white">{format(parseISO(latestPred.calculated_finish!), 'MMM d')}</span>.
+                     </span>
+                     <span className="text-orange-300 text-xs font-semibold block mt-1">Overlap Penalty: {Math.abs(task.lag || 0)} days.</span>
+                  </div>
+                </div>
+                
+                <div className="flex flex-col space-y-2 mt-2 pt-2 border-t border-orange-500/20">
+                   <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Engine Solutions</span>
+                   <button 
+                     onClick={() => {
+                       updateTaskLag(task.id, 0);
+                     }}
+                     className="w-full text-xs font-bold py-1.5 px-3 bg-orange-500/20 hover:bg-orange-500/40 text-orange-100 rounded transition border border-orange-500/50 hover:border-orange-400/80 shadow text-left flex justify-between items-center"
+                   >
+                     <span>1. Snap to Earliest Possible Start</span>
+                     <span className="text-[10px] text-orange-300/80 font-normal">Resets Lag to 0</span>
+                   </button>
+                   
+                   <button 
+                     onClick={() => {
+                       if (latestPred) {
+                          const newDur = Math.max(1, latestPred.duration + (task.lag || 0));
+                          updateTaskDuration(latestPred.id, newDur);
+                       }
+                     }}
+                     className="w-full text-xs font-bold py-1.5 px-3 bg-orange-500/20 hover:bg-orange-500/40 text-orange-100 rounded transition border border-orange-500/50 hover:border-orange-400/80 shadow text-left flex justify-between items-center"
+                   >
+                     <span>2. Squeeze Predecessor Duration</span>
+                     <span className="text-[10px] text-orange-300/80 font-normal">Shortens {latestPred?.name}</span>
+                   </button>
+                </div>
+             </div>
+           )}
+
+           <div className="grid grid-cols-2 gap-2 text-sm mt-4">
              <div className="bg-slate-700/30 p-2 rounded border border-slate-700/50">
                <span className="text-slate-400 text-xs block">Logic Start</span>
                <span className="text-slate-200">
@@ -230,11 +292,10 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
              </div>
              <div className="bg-slate-700/30 p-2 rounded border border-slate-700/50">
                <span className="text-slate-400 text-xs block">Bottleneck</span>
-               <span className="text-slate-200">{task.bottleneck_vendor || 'None'}</span>
+               <span className="text-slate-200 tracking-tight truncate block">{task.bottleneck_vendor || 'None'}</span>
              </div>
            </div>
         </div>
-
       </div>
     </div>
   );

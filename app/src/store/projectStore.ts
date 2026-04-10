@@ -22,6 +22,17 @@ export interface ActiveFilters {
   scopes: string[];
 }
 
+export interface TaskUndoEntry {
+  type: 'TASK_UPDATE';
+  taskId: string;
+  prev: {
+    duration?: number;
+    lag?: number;
+    subcontractor?: string | null;
+    bottleneck_vendor?: string | null;
+  };
+}
+
 interface ProjectState {
   projects: Project[];
   tasks: EngineTask[];
@@ -32,6 +43,8 @@ interface ProjectState {
   error: string | null;
   vendorColors: Record<string, string>;
   activeFilters: ActiveFilters;
+  undoStack: TaskUndoEntry[];
+  redoStack: TaskUndoEntry[];
   
   fetchData: () => Promise<void>;
   addProject: (name: string, startDate: string) => Promise<void>;
@@ -42,6 +55,8 @@ interface ProjectState {
   toggleFilter: (type: keyof ActiveFilters, value: string) => void;
   clearFilters: () => void;
   deleteProject: (projectId: string) => Promise<void>;
+  undo: () => Promise<void>;
+  redo: () => Promise<void>;
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
@@ -54,6 +69,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       error: null,
       vendorColors: {},
       activeFilters: { vendors: [], scopes: [] },
+      undoStack: [],
+      redoStack: [],
 
       toggleFilter: (type: keyof ActiveFilters, value: string) => {
         set((state) => {
@@ -232,6 +249,19 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   updateTaskDuration: async (taskId: string, duration: number) => {
+    const task = get().tasks.find(t => t.id === taskId);
+    if (task) {
+      const entry: TaskUndoEntry = {
+        type: 'TASK_UPDATE',
+        taskId,
+        prev: { duration: task.duration }
+      };
+      set(state => ({ 
+        undoStack: [entry, ...state.undoStack].slice(0, 50),
+        redoStack: []
+      }));
+    }
+
     // Optimistic update logic could go here, but for simplicity we await db save so logic engine syncs
     const { error } = await supabase.from('tasks').update({ duration: Math.max(1, duration) }).eq('id', taskId);
     if (!error) {
@@ -240,16 +270,117 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   updateTaskLag: async (taskId: string, lag: number) => {
-    const { error } = await supabase.from('tasks').update({ lag: Math.max(0, lag) }).eq('id', taskId);
+    const task = get().tasks.find(t => t.id === taskId);
+    if (task) {
+      const entry: TaskUndoEntry = {
+        type: 'TASK_UPDATE',
+        taskId,
+        prev: { lag: task.lag }
+      };
+      set(state => ({ 
+        undoStack: [entry, ...state.undoStack].slice(0, 50),
+        redoStack: []
+      }));
+    }
+
+    const { error } = await supabase.from('tasks').update({ lag }).eq('id', taskId);
     if (!error) {
        await get().fetchData();
     }
   },
 
   updateTaskSubcontractor: async (taskId: string, subcontractor: string | null, bottleneck_vendor: string | null) => {
+    const task = get().tasks.find(t => t.id === taskId);
+    if (task) {
+      const entry: TaskUndoEntry = {
+        type: 'TASK_UPDATE',
+        taskId,
+        prev: { subcontractor: task.subcontractor, bottleneck_vendor: task.bottleneck_vendor }
+      };
+      set(state => ({ 
+        undoStack: [entry, ...state.undoStack].slice(0, 50),
+        redoStack: []
+      }));
+    }
+
     const { error } = await supabase.from('tasks').update({ subcontractor, bottleneck_vendor }).eq('id', taskId);
     if (!error) {
        await get().fetchData();
+    }
+  },
+
+  undo: async () => {
+    const stack = get().undoStack;
+    if (stack.length === 0) return;
+
+    const [lastAction, ...remainingStack] = stack;
+    
+    // Capture current state for redo BEFORE applying undo
+    const task = get().tasks.find(t => t.id === lastAction.taskId);
+    if (task) {
+        const redoEntry: TaskUndoEntry = {
+            type: 'TASK_UPDATE',
+            taskId: lastAction.taskId,
+            prev: {}
+        };
+        // Fill prev with current values that are about to be overwritten
+        if ('duration' in lastAction.prev) redoEntry.prev.duration = task.duration;
+        if ('lag' in lastAction.prev) redoEntry.prev.lag = task.lag;
+        if ('subcontractor' in lastAction.prev) {
+            redoEntry.prev.subcontractor = task.subcontractor;
+            redoEntry.prev.bottleneck_vendor = task.bottleneck_vendor;
+        }
+
+        set(state => ({ 
+            undoStack: remainingStack,
+            redoStack: [redoEntry, ...state.redoStack].slice(0, 50)
+        }));
+
+        const { error } = await supabase
+            .from('tasks')
+            .update(lastAction.prev)
+            .eq('id', lastAction.taskId);
+        
+        if (!error) {
+            await get().fetchData();
+        }
+    }
+  },
+
+  redo: async () => {
+    const stack = get().redoStack;
+    if (stack.length === 0) return;
+
+    const [nextAction, ...remainingStack] = stack;
+
+    // Capture current state for undo BEFORE applying redo
+    const task = get().tasks.find(t => t.id === nextAction.taskId);
+    if (task) {
+        const undoEntry: TaskUndoEntry = {
+            type: 'TASK_UPDATE',
+            taskId: nextAction.taskId,
+            prev: {}
+        };
+        if ('duration' in nextAction.prev) undoEntry.prev.duration = task.duration;
+        if ('lag' in nextAction.prev) undoEntry.prev.lag = task.lag;
+        if ('subcontractor' in nextAction.prev) {
+            undoEntry.prev.subcontractor = task.subcontractor;
+            undoEntry.prev.bottleneck_vendor = task.bottleneck_vendor;
+        }
+
+        set(state => ({ 
+            redoStack: remainingStack,
+            undoStack: [undoEntry, ...state.undoStack].slice(0, 50)
+        }));
+
+        const { error } = await supabase
+            .from('tasks')
+            .update(nextAction.prev)
+            .eq('id', nextAction.taskId);
+        
+        if (!error) {
+            await get().fetchData();
+        }
     }
   }
 }));

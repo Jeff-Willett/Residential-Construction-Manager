@@ -1,21 +1,37 @@
 import { addDays, isWeekend, format, parseISO } from 'date-fns';
 
 export function addWorkingDays(startDateStr: string, daysToAdd: number): string {
-  let currentDate = parseISO(startDateStr);
-  
-  while (isWeekend(currentDate)) {
-    currentDate = addDays(currentDate, 1);
-  }
+  try {
+    if (!startDateStr || startDateStr.length < 8) return format(new Date(), 'yyyy-MM-dd');
+    let currentDate = parseISO(startDateStr);
+    
+    if (currentDate.getFullYear() < 2000) currentDate.setFullYear(2026);
+    
+    // Support zero lag (start on the same day as base)
+    if (daysToAdd === 0) return format(currentDate, 'yyyy-MM-dd');
 
-  // A 1-day task finishes on its start day (so we add 0 calendar jumps)
-  let daysAdded = 0;
-  while (daysAdded < daysToAdd - 1) {
-    currentDate = addDays(currentDate, 1);
-    if (!isWeekend(currentDate)) {
-      daysAdded++;
+    const isForward = daysToAdd > 0;
+    let daysAdded = 0;
+    const absDays = Math.abs(daysToAdd);
+
+    // If forward, we stay on this day if it's a workday, otherwise jump to next workday
+    while (isWeekend(currentDate)) {
+      currentDate = addDays(currentDate, isForward ? 1 : -1);
     }
+
+    // A 1-day task finishes on its start day (so we jump 0 times for duration=1)
+    // For lag/offsets, we jump the actual number of working days
+    while (daysAdded < absDays) {
+      currentDate = addDays(currentDate, isForward ? 1 : -1);
+      if (!isWeekend(currentDate)) {
+        daysAdded++;
+      }
+    }
+    return format(currentDate, 'yyyy-MM-dd');
+  } catch (e) {
+    console.error('addWorkingDays error:', e);
+    return format(new Date(), 'yyyy-MM-dd');
   }
-  return format(currentDate, 'yyyy-MM-dd');
 }
 
 export function differenceInWorkingDays(startDateStr: string, endDateStr: string): number {
@@ -168,7 +184,7 @@ export function calculateScheduleEngine(
                  maxFinish = preTask.calculated_finish!;
              }
           }
-          sTask.logic_start = addWorkingDays(maxFinish, 2 + (sTask.lag || 0)); 
+          sTask.logic_start = addWorkingDays(maxFinish, 1 + (sTask.lag || 0)); 
           readyTasks.push(succ);
       }
     }

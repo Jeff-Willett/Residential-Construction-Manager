@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useRef, useEffect } from 'react';
 import { useProjectStore } from '../store/projectStore';
 import { differenceInDays, addDays, format, isWeekend, startOfWeek, parseISO } from 'date-fns';
 import { clsx } from 'clsx';
@@ -7,6 +7,13 @@ import { ZoomIn, ZoomOut, AlertTriangle, UserMinus } from 'lucide-react';
 export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: string) => void, selectedTaskId: string | null }) {
   const { projects, tasks, deleteProject, vendorColors, activeFilters } = useProjectStore();
   const [colWidth, setColWidth] = useState(40);
+  const [leftPanelWidth, setLeftPanelWidth] = useState(256);
+  const isResizing = useRef(false);
+  
+  const mainScrollRef = useRef<HTMLDivElement>(null);
+  const topScrollRef = useRef<HTMLDivElement>(null);
+  const isScrollingTop = useRef(false);
+  const isScrollingMain = useRef(false);
 
   const visibleTasks = useMemo(() => {
     const { vendors, scopes } = activeFilters;
@@ -61,10 +68,61 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
     return { dates: dateArray, getCol, monthGroups, weekGroups };
   }, [tasks, projects]);
 
+  const { monthGroups = [], weekGroups = [], dates = [], getCol } = datesInfo;
+
+  // Handle resizing of the left panel
+  const handleMouseDown = (e: React.MouseEvent) => {
+    isResizing.current = true;
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    document.body.style.cursor = 'col-resize';
+  };
+
+  const handleMouseMove = (e: MouseEvent) => {
+    if (!isResizing.current) return;
+    const newWidth = Math.max(150, Math.min(600, e.clientX));
+    setLeftPanelWidth(newWidth);
+  };
+
+  const handleMouseUp = () => {
+    isResizing.current = false;
+    document.removeEventListener('mousemove', handleMouseMove);
+    document.removeEventListener('mouseup', handleMouseUp);
+    document.body.style.cursor = 'default';
+  };
+  useEffect(() => {
+    const mainScroll = mainScrollRef.current;
+    const topScroll = topScrollRef.current;
+
+    if (!mainScroll || !topScroll) return;
+
+    const syncTop = () => {
+      if (!isScrollingMain.current) {
+        isScrollingTop.current = true;
+        topScroll.scrollLeft = mainScroll.scrollLeft;
+        setTimeout(() => isScrollingTop.current = false, 50);
+      }
+    };
+
+    const syncMain = () => {
+      if (!isScrollingTop.current) {
+        isScrollingMain.current = true;
+        mainScroll.scrollLeft = topScroll.scrollLeft;
+        setTimeout(() => isScrollingMain.current = false, 50);
+      }
+    };
+
+    mainScroll.addEventListener('scroll', syncTop);
+    topScroll.addEventListener('scroll', syncMain);
+
+    return () => {
+      mainScroll.removeEventListener('scroll', syncTop);
+      topScroll.removeEventListener('scroll', syncMain);
+    };
+  }, [datesInfo]); // Re-sync if dates change
+
   const handleZoomIn = () => setColWidth(prev => Math.min(prev + 10, 80));
   const handleZoomOut = () => setColWidth(prev => Math.max(prev - 10, 20));
-
-  const { monthGroups = [], weekGroups = [], dates = [], getCol } = datesInfo;
 
   return (
     <div className="flex flex-col h-full relative">
@@ -80,10 +138,33 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
         </div>
       </div>
 
-      <div className="flex flex-1 overflow-auto relative rounded-b-xl hide-scrollbar">
+      {/* Top Scrollbar (Visible when tasks exist) */}
+      {tasks.length > 0 && (
+        <div 
+          ref={topScrollRef}
+          className="h-3 overflow-x-auto overflow-y-hidden bg-slate-900 border-b border-slate-700 sticky top-0 z-50 rounded-t-xl"
+          style={{ paddingLeft: `${leftPanelWidth}px` }} // Dynamic alignment
+        >
+          <div style={{ width: dates.length * colWidth, height: '1px' }} />
+        </div>
+      )}
+
+      <div 
+        ref={mainScrollRef}
+        className="flex flex-1 overflow-auto relative rounded-b-xl hide-scrollbar"
+      >
         {/* Left Side: Task Table */}
-        <div className="w-64 flex-shrink-0 border-r border-slate-700 bg-slate-800/90 z-30 sticky left-0 shadow-[4px_0_12px_rgba(0,0,0,0.5)]">
-          <div className="h-[104px] border-b border-slate-700 flex items-end pb-2 px-4 text-xs font-semibold text-slate-400 uppercase tracking-wider bg-slate-900/60 w-full z-10 sticky top-0">
+        <div 
+          style={{ width: leftPanelWidth }}
+          className="flex-shrink-0 border-r border-slate-700 bg-slate-800/90 z-40 sticky left-0 shadow-[4px_0_12px_rgba(0,0,0,0.5)] group/left"
+        >
+          {/* Resize Handle */}
+          <div 
+            onMouseDown={handleMouseDown}
+            className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-cyan-500/50 transition-colors z-50"
+            title="Drag to resize"
+          />
+          <div className="h-[104px] border-b border-slate-700 flex items-end pb-2 px-4 text-xs font-semibold text-slate-400 uppercase tracking-wider bg-slate-900 w-full z-10 sticky top-0 shadow-sm">
             Task Name
           </div>
           <div className="py-0">
@@ -94,7 +175,7 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
               return (
               <div key={proj.id}>
                 {/* Project Header */}
-                <div className="h-10 bg-slate-700/60 px-4 flex items-center justify-between text-sm font-bold text-slate-200 border-b border-slate-700 sticky top-[104px] z-10 shadow-sm backdrop-blur">
+                <div className="h-10 bg-slate-800 px-4 flex items-center justify-between text-sm font-bold text-slate-200 border-b border-slate-700 sticky top-[104px] z-20 shadow backdrop-blur">
                   <span>{proj.name}</span>
                   <button onClick={() => { if(confirm('Delete project?')) deleteProject(proj.id); }} className="text-slate-400 hover:text-red-400 transition" title="Delete Project">
                      <UserMinus size={14} />
@@ -138,11 +219,11 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
         </div>
 
         {/* Right Side: Timeline Grid */}
-        <div className="flex-1 relative overflow-auto pb-8">
+        <div className="flex-1 relative pb-8">
           <div className="inline-flex min-w-full">
             <div className="flex flex-col w-full relative">
               {/* Month Header */}
-              <div className="flex border-b border-slate-700 h-8 bg-slate-900/80 text-slate-300 sticky top-0 z-20">
+              <div className="flex border-b border-slate-700 h-8 bg-slate-900 text-slate-300 sticky top-0 z-30">
                 {monthGroups.map((group, i) => (
                   <div 
                     key={i} 
@@ -155,7 +236,7 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
               </div>
 
               {/* Week Header */}
-              <div className="flex border-b border-slate-700 h-8 bg-slate-800/80 text-slate-400 sticky top-8 z-20">
+              <div className="flex border-b border-slate-700 h-8 bg-slate-800 text-slate-400 sticky top-8 z-30">
                 {weekGroups.map((group, i) => (
                   <div 
                     key={i} 
@@ -168,7 +249,7 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
               </div>
 
               {/* Header Days */}
-              <div className="flex border-b border-slate-700 h-10 sticky top-[64px] z-20 shadow-sm backdrop-blur-md">
+              <div className="flex border-b border-slate-700 h-10 sticky top-[64px] z-30 shadow-sm backdrop-blur">
                 {dates.map((date, i) => {
                   const isWknd = isWeekend(date);
                   return (
@@ -240,6 +321,7 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
                               !customColor && !isDelayed && "bg-gradient-to-r from-cyan-600 to-blue-600 border border-cyan-400/50 shadow-[0_4px_12px_rgba(8,145,178,0.3)]",
                               customColor && "shadow-md border border-black/20",
                               customColor && isDelayed && "border-2 border-red-500 ring-2 ring-red-500/60 ring-offset-1 ring-offset-slate-900",
+                              (task.lag < 0) && "border-2 border-orange-500 ring-2 ring-orange-400/50 shadow-[0_0_10px_rgba(249,115,22,0.6)]",
                               selectedTaskId === task.id && "ring-2 ring-white ring-offset-1 ring-offset-slate-900 scale-105"
                             )}
                             style={{
@@ -249,8 +331,11 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
                             }}
                           >
                              {colWidth > 30 && (
-                               <span className="text-[10px] font-bold text-white drop-shadow-md truncate">
-                                  {isDelayed ? `${task.delay_days}d Delay (${task.bottleneck_vendor})` : `${task.duration}d`}
+                               <span className={clsx(
+                                 "text-[10px] font-bold text-white drop-shadow-md truncate px-1 rounded",
+                                 task.lag < 0 && "bg-orange-600/50"
+                               )}>
+                                  {task.lag < 0 ? `❗Overlap ${task.lag}d` : (isDelayed ? `${task.delay_days}d Delay (${task.bottleneck_vendor})` : `${task.duration}d`)}
                                </span>
                              )}
                           </div>
