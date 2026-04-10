@@ -71,7 +71,7 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
   const { monthGroups = [], weekGroups = [], dates = [], getCol } = datesInfo;
 
   // Handle resizing of the left panel
-  const handleMouseDown = (e: React.MouseEvent) => {
+  const handleMouseDown = (_e: React.MouseEvent) => {
     isResizing.current = true;
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
