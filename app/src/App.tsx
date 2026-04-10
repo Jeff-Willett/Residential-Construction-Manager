@@ -3,12 +3,16 @@ import { useProjectStore } from './store/projectStore';
 import { GanttChart } from './components/GanttChart';
 import { SidePanel } from './components/SidePanel';
 import { VendorColorModal } from './components/VendorColorModal';
-import { Settings } from 'lucide-react';
+import { FilterModal } from './components/FilterModal';
+import { Settings, Filter } from 'lucide-react';
 
 function App() {
-  const { projects, tasks, isLoading, error, fetchData } = useProjectStore();
+  const { projects, tasks, isLoading, error, fetchData, activeFilters } = useProjectStore();
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
+
+  const activeFilterCount = activeFilters.vendors.length + activeFilters.scopes.length;
 
   useEffect(() => {
     fetchData();
@@ -28,6 +32,18 @@ function App() {
             <p className="text-sm text-slate-400">Scheduling Engine & Gantt Manager</p>
           </div>
           <div className="flex items-center space-x-3">
+             <button
+               onClick={() => setIsFilterOpen(true)}
+               className="relative p-2 bg-slate-800 hover:bg-slate-700 rounded-md border border-slate-700 shadow-sm transition-colors text-slate-300 hover:text-white"
+               title="Filter Logic"
+             >
+               <Filter size={20} />
+               {activeFilterCount > 0 && (
+                 <span className="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-cyan-500 text-[10px] font-bold text-white shadow shadow-cyan-500/50">
+                   {activeFilterCount}
+                 </span>
+               )}
+             </button>
              <button
                onClick={() => setIsSettingsOpen(true)}
                className="p-2 bg-slate-800 hover:bg-slate-700 rounded-md border border-slate-700 shadow-sm transition-colors text-slate-300 hover:text-white"
@@ -92,6 +108,11 @@ function App() {
       {/* Settings Modal */}
       {isSettingsOpen && (
         <VendorColorModal onClose={() => setIsSettingsOpen(false)} />
+      )}
+
+      {/* Filter Modal */}
+      {isFilterOpen && (
+        <FilterModal onClose={() => setIsFilterOpen(false)} />
       )}
     </div>
   );

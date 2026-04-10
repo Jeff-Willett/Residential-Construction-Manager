@@ -17,6 +17,11 @@ export interface TemplateDependency {
   successor_id: string;
 }
 
+export interface ActiveFilters {
+  vendors: string[];
+  scopes: string[];
+}
+
 interface ProjectState {
   projects: Project[];
   tasks: EngineTask[];
@@ -26,12 +31,16 @@ interface ProjectState {
   isLoading: boolean;
   error: string | null;
   vendorColors: Record<string, string>;
+  activeFilters: ActiveFilters;
   
   fetchData: () => Promise<void>;
   addProject: (name: string, startDate: string) => Promise<void>;
-  deleteProject: (projectId: string) => Promise<void>;
   updateTaskDuration: (taskId: string, duration: number) => Promise<void>;
+  updateTaskLag: (taskId: string, lag: number) => Promise<void>;
+  updateTaskSubcontractor: (taskId: string, subcontractor: string | null, bottleneck_vendor: string | null) => Promise<void>;
   setVendorColor: (vendor: string, color: string) => Promise<void>;
+  toggleFilter: (type: keyof ActiveFilters, value: string) => void;
+  clearFilters: () => void;
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
@@ -43,6 +52,17 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       isLoading: true,
       error: null,
       vendorColors: {},
+      activeFilters: { vendors: [], scopes: [] },
+
+      toggleFilter: (type: keyof ActiveFilters, value: string) => {
+        set((state) => {
+          const arr = state.activeFilters[type];
+          const newArr = arr.includes(value) ? arr.filter(v => v !== value) : [...arr, value];
+          return { activeFilters: { ...state.activeFilters, [type]: newArr } };
+        });
+      },
+
+      clearFilters: () => set({ activeFilters: { vendors: [], scopes: [] } }),
 
       setVendorColor: async (vendor: string, color: string) => {
         // Optimistic UI update
@@ -114,6 +134,17 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
       // Apply Engine Logic
       const recalculated = calculateScheduleEngine(projects, fetchedTasks, fetchedDeps);
+
+      // Force deterministic chronological order to prevent Postgres UPDATE tuple jumping
+      recalculated.sort((a, b) => {
+         // Project grouping implicitly handled by React rendering structure later,
+         // but sort by logic_start or calculated_start inside here.
+         const startA = a.calculated_start ? new Date(a.calculated_start).getTime() : 0;
+         const startB = b.calculated_start ? new Date(b.calculated_start).getTime() : 0;
+         if (startA !== startB) return startA - startB;
+         return a.name.localeCompare(b.name);
+      });
+
       set({ 
         projects, 
         tasks: recalculated, 
@@ -202,6 +233,20 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   updateTaskDuration: async (taskId: string, duration: number) => {
     // Optimistic update logic could go here, but for simplicity we await db save so logic engine syncs
     const { error } = await supabase.from('tasks').update({ duration: Math.max(1, duration) }).eq('id', taskId);
+    if (!error) {
+       await get().fetchData();
+    }
+  },
+
+  updateTaskLag: async (taskId: string, lag: number) => {
+    const { error } = await supabase.from('tasks').update({ lag: Math.max(0, lag) }).eq('id', taskId);
+    if (!error) {
+       await get().fetchData();
+    }
+  },
+
+  updateTaskSubcontractor: async (taskId: string, subcontractor: string | null, bottleneck_vendor: string | null) => {
+    const { error } = await supabase.from('tasks').update({ subcontractor, bottleneck_vendor }).eq('id', taskId);
     if (!error) {
        await get().fetchData();
     }

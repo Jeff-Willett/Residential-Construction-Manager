@@ -5,8 +5,18 @@ import { clsx } from 'clsx';
 import { ZoomIn, ZoomOut, AlertTriangle, UserMinus } from 'lucide-react';
 
 export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: string) => void, selectedTaskId: string | null }) {
-  const { projects, tasks, deleteProject, vendorColors } = useProjectStore();
+  const { projects, tasks, deleteProject, vendorColors, activeFilters } = useProjectStore();
   const [colWidth, setColWidth] = useState(40);
+
+  const visibleTasks = useMemo(() => {
+    const { vendors, scopes } = activeFilters;
+    if (vendors.length === 0 && scopes.length === 0) return tasks;
+    return tasks.filter(task => {
+      const matchVendor = vendors.length === 0 || (task.subcontractor && vendors.includes(task.subcontractor));
+      const matchScope = scopes.length === 0 || scopes.includes(task.name);
+      return matchVendor && matchScope;
+    });
+  }, [tasks, activeFilters]);
 
   const datesInfo = useMemo(() => {
     if (tasks.length === 0 || projects.length === 0) return { dates: [], getCol: () => 1 };
@@ -77,7 +87,11 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
             Task Name
           </div>
           <div className="py-0">
-            {projects.map(proj => (
+            {projects.map(proj => {
+              const projectTasks = visibleTasks.filter(t => t.project_id === proj.id);
+              if (projectTasks.length === 0) return null;
+
+              return (
               <div key={proj.id}>
                 {/* Project Header */}
                 <div className="h-10 bg-slate-700/60 px-4 flex items-center justify-between text-sm font-bold text-slate-200 border-b border-slate-700 sticky top-[104px] z-10 shadow-sm backdrop-blur">
@@ -87,7 +101,7 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
                   </button>
                 </div>
                 {/* Project Tasks */}
-                {tasks.filter(t => t.project_id === proj.id).map(task => (
+                {projectTasks.map(task => (
                   <div 
                     key={task.id} 
                     onClick={() => onTaskClick(task.id)}
@@ -104,13 +118,22 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
                        </span>
                        <span className="text-xs font-medium text-slate-200 truncate">{task.name}</span>
                        <span className="text-[10px] text-slate-500 flex-shrink-0">({task.duration}d)</span>
-                       {task.bottleneck_vendor && <span className="text-[9px] text-orange-400/80 uppercase truncate">[{task.bottleneck_vendor}]</span>}
+                       {task.subcontractor && (
+                           <span className={clsx(
+                             "text-[9px] uppercase truncate font-bold",
+                             (task.delay_days || 0) > 0 ? "text-red-400" 
+                             : (task.lag || 0) > 0 ? "text-orange-400" 
+                             : "text-green-400/80"
+                           )}>
+                             [{task.subcontractor}]
+                           </span>
+                       )}
                     </div>
                     {(task.delay_days || 0) > 0 && <AlertTriangle size={12} className="text-red-500 flex-shrink-0 drop-shadow ml-1" title={`Delay: ${task.delay_days} days`} />}
                   </div>
                 ))}
               </div>
-            ))}
+            )})}
           </div>
         </div>
 
@@ -179,10 +202,14 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
                   ))}
                 </div>
 
-                {projects.map(proj => (
+                {projects.map(proj => {
+                  const projectTasks = visibleTasks.filter(t => t.project_id === proj.id);
+                  if (projectTasks.length === 0) return null;
+
+                  return (
                   <div key={`grid-${proj.id}`}>
                     <div className="h-10 border-b border-slate-700/30 bg-slate-800/20" />
-                    {tasks.filter(t => t.project_id === proj.id).map((task) => {
+                    {projectTasks.map((task) => {
                       if (!task.calculated_start || !task.calculated_finish) return <div key={task.id} className="h-8" />;
                       
                       const startCol = getCol(task.calculated_start);
@@ -231,7 +258,7 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
                       );
                     })}
                   </div>
-                ))}
+                )})}
               </div>
             </div>
           </div>

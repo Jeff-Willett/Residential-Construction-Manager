@@ -54,6 +54,7 @@ export interface EngineTask {
   calculated_start?: string; // logic_start + resource wait if any
   calculated_finish?: string; // calculated_start + duration
   delay_days?: number; // difference in days between logic and calculated
+  delay_cause_task_id?: string; // Which conflicting task is holding up this vendor
 }
 
 export interface EngineDependency {
@@ -69,8 +70,8 @@ export function calculateScheduleEngine(
 ): EngineTask[] {
   
   // Track vendor busy dates globally across all projects
-  // Map of vendorName -> "yyyy-MM-dd" (the last day they are busy)
-  const vendorOccupancy = new Map<string, string>();
+  // Map of vendorName -> state
+  const vendorOccupancy = new Map<string, { lastBusy: string, taskId: string }>();
 
   const taskMap = new Map<string, EngineTask>();
   tasks.forEach(t => taskMap.set(t.id, { ...t }));
@@ -98,7 +99,9 @@ export function calculateScheduleEngine(
     if (degree === 0) {
       const t = taskMap.get(id)!;
       const proj = projects.find(p => p.id === t.project_id);
-      t.logic_start = proj ? proj.start_date : format(new Date(), 'yyyy-MM-dd'); 
+      
+      const baseStart = proj ? proj.start_date : format(new Date(), 'yyyy-MM-dd');
+      t.logic_start = addWorkingDays(baseStart, t.lag || 0);
       readyTasks.push(id);
     }
   });
@@ -128,11 +131,12 @@ export function calculateScheduleEngine(
     let actualStart = task.logic_start!;
     
     if (task.bottleneck_vendor) {
-        const vendorLastBusy = vendorOccupancy.get(task.bottleneck_vendor);
-        if (vendorLastBusy) {
-             const vendorAvailableDate = addWorkingDays(vendorLastBusy, 2); // 1 day after last busy
+        const vendorState = vendorOccupancy.get(task.bottleneck_vendor);
+        if (vendorState) {
+             const vendorAvailableDate = addWorkingDays(vendorState.lastBusy, 2); // 1 day after last busy
              if (parseISO(vendorAvailableDate) > parseISO(actualStart)) {
                  actualStart = vendorAvailableDate;
+                 task.delay_cause_task_id = vendorState.taskId;
              }
         }
     }
@@ -141,7 +145,7 @@ export function calculateScheduleEngine(
     task.calculated_finish = addWorkingDays(actualStart, task.duration);
     
     if (task.bottleneck_vendor) {
-        vendorOccupancy.set(task.bottleneck_vendor, task.calculated_finish);
+        vendorOccupancy.set(task.bottleneck_vendor, { lastBusy: task.calculated_finish, taskId: task.id });
     }
     
     if (task.calculated_start === task.logic_start) {
@@ -164,7 +168,7 @@ export function calculateScheduleEngine(
                  maxFinish = preTask.calculated_finish!;
              }
           }
-          sTask.logic_start = addWorkingDays(maxFinish, 2); 
+          sTask.logic_start = addWorkingDays(maxFinish, 2 + (sTask.lag || 0)); 
           readyTasks.push(succ);
       }
     }
