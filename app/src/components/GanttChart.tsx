@@ -62,6 +62,7 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
   const topScrollRef = useRef<HTMLDivElement>(null);
   const isScrollingTop = useRef(false);
   const isScrollingMain = useRef(false);
+  const pendingZoomFocusDay = useRef<number | null>(null);
 
   const visibleTasks = useMemo(() => {
     const { vendors, scopes } = activeFilters;
@@ -297,11 +298,33 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
     };
   }, [datesInfo]);
 
+  useEffect(() => {
+    const mainScroll = mainScrollRef.current;
+    if (!mainScroll || pendingZoomFocusDay.current === null) return;
+
+    const viewportWidth = mainScroll.clientWidth;
+    const targetScrollLeft = Math.max(0, pendingZoomFocusDay.current * dayWidth - viewportWidth / 2);
+    mainScroll.scrollLeft = targetScrollLeft;
+    if (topScrollRef.current) {
+      topScrollRef.current.scrollLeft = targetScrollLeft;
+    }
+    pendingZoomFocusDay.current = null;
+  }, [dayWidth]);
+
+  const captureZoomFocus = () => {
+    const mainScroll = mainScrollRef.current;
+    if (!mainScroll) return;
+
+    const viewportCenter = mainScroll.scrollLeft + mainScroll.clientWidth / 2;
+    pendingZoomFocusDay.current = viewportCenter / dayWidth;
+  };
+
   const togglePhase = (phaseId: string) => {
     setExpandedPhases((prev) => ({ ...prev, [phaseId]: !(prev[phaseId] ?? true) }));
   };
 
   const handleZoomIn = () => {
+    captureZoomFocus();
     if (zoomLevel === 'month') setZoomLevel('week');
     else if (zoomLevel === 'week') {
       setZoomLevel('day');
@@ -312,6 +335,7 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
   };
 
   const handleZoomOut = () => {
+    captureZoomFocus();
     if (zoomLevel === 'day') {
       if (colWidth > 30) {
         setColWidth((prev) => Math.max(prev - 10, 30));
@@ -323,6 +347,24 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
       setZoomLevel('month');
       setColWidth(300);
     }
+  };
+
+  const toggleProjectPhases = (projectId: string) => {
+    const phaseIds = chartRows
+      .filter((row): row is Extract<ChartRow, { kind: 'phase' }> => row.kind === 'phase' && row.projectId === projectId)
+      .map((row) => row.phaseId);
+
+    if (phaseIds.length === 0) return;
+
+    const shouldExpand = phaseIds.some((phaseId) => !(expandedPhases[phaseId] ?? true));
+
+    setExpandedPhases((prev) => {
+      const next = { ...prev };
+      phaseIds.forEach((phaseId) => {
+        next[phaseId] = shouldExpand;
+      });
+      return next;
+    });
   };
 
   return (
@@ -375,19 +417,32 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
                     style={{ height: row.height }}
                     className="px-4 flex items-center justify-between border-b border-slate-700/50 bg-slate-800"
                   >
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex items-center gap-2">
+                      <button
+                        onClick={() => toggleProjectPhases(row.projectId)}
+                        className="p-1 rounded text-cyan-400 hover:bg-slate-700/70 hover:text-cyan-300 transition flex-shrink-0"
+                        title="Expand or collapse all phases in this project"
+                      >
+                        {chartRows.some((item) => item.kind === 'phase' && item.projectId === row.projectId && !(item.expanded ?? true)) ? (
+                          <ChevronRight size={14} />
+                        ) : (
+                          <ChevronDown size={14} />
+                        )}
+                      </button>
                       <div className="text-sm font-bold text-slate-100 truncate">{row.label}</div>
-                      <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">{row.taskCount} scopes</div>
+                      <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500 flex-shrink-0">{row.taskCount} scopes</div>
                     </div>
-                    <button
-                      onClick={() => {
-                        if (confirm('Delete project?')) deleteProject(row.projectId);
-                      }}
-                      className="text-slate-400 hover:text-red-400 transition ml-2"
-                      title="Delete Project"
-                    >
-                      <UserMinus size={14} />
-                    </button>
+                    <div className="flex items-center gap-2 ml-2">
+                      <button
+                        onClick={() => {
+                          if (confirm('Delete project?')) deleteProject(row.projectId);
+                        }}
+                        className="text-slate-400 hover:text-red-400 transition"
+                        title="Delete Project"
+                      >
+                        <UserMinus size={14} />
+                      </button>
+                    </div>
                   </div>
                 );
               }
@@ -402,10 +457,8 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
                   >
                     <div className="flex items-center gap-2 min-w-0">
                       {row.expanded ? <ChevronDown size={14} className="text-cyan-400 flex-shrink-0" /> : <ChevronRight size={14} className="text-cyan-400 flex-shrink-0" />}
-                      <div className="min-w-0">
-                        <div className="text-xs font-semibold text-slate-200 truncate">{row.label}</div>
-                        <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">{row.taskCount} scopes</div>
-                      </div>
+                      <div className="text-xs font-semibold text-slate-200 truncate">{row.label}</div>
+                      <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500 flex-shrink-0">{row.taskCount} scopes</div>
                     </div>
                   </button>
                 );
