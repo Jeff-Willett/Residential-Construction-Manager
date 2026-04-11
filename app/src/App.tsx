@@ -29,7 +29,12 @@ function App() {
             <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-cyan-300">
               Residential Construction
             </h1>
-            <p className="text-sm text-slate-400">Residential Construction Manager</p>
+            <p className="text-sm text-slate-400 flex items-center">
+              Residential Construction Manager
+              <span className="ml-2 px-1.5 py-0.5 bg-slate-800 text-slate-500 text-[10px] rounded border border-slate-700 font-mono">
+                v0.0.8
+              </span>
+            </p>
           </div>
           <div className="flex items-center space-x-3">
              <button
