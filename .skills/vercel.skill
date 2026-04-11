@@ -1,0 +1,18 @@
+# Vercel Operations Skill
+# Use this skill to manage deployments, environment variables, and logs on Vercel.
+
+## Core Instructions
+- **Command Base**: Prefer `vercel`. If not found, use `npx vercel`.
+- **Environment Context**: Always run `vercel env pull .env.local` before starting local development to ensure parity with production.
+- **Log Investigation**: Use `vercel logs` to debug 500 errors or deployment failures.
+- **Preview Deployments**: Use `vercel deploy` for immediate feedback on changes without pushing to the main branch.
+
+## Common Commands
+- Pull Env Vars: `vercel env pull .env.local`
+- Deploy to Preview: `vercel deploy`
+- Deploy to Production: `vercel deploy --prod`
+- View Deployment Logs: `vercel logs <deployment-url>`
+- List Projects: `vercel project list`
+
+## Setup Note
+Ensure you are in the project root or the `app` directory where `vercel.json` or the linked project exists.

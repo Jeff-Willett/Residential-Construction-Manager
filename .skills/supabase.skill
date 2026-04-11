@@ -1,0 +1,18 @@
+# Supabase Development Skill
+# Use this skill to manage database schemas, migrations, and local/remote Supabase environments.
+
+## Core Instructions
+- **Command Base**: Prefer `supabase`. If not found, use `npx supabase`.
+- **Database Migrations**: Always manage schema changes through `supabase db push` or by creating migrations in the `supabase/migrations` folder.
+- **Type Safety**: Run `supabase gen types typescript --local > app/src/types/supabase.ts` after any schema change to keep the frontend in sync.
+- **Local Dev**: Use `supabase start` if using a local Docker-based Supabase instance.
+
+## Common Commands
+- Check Project Status: `supabase status`
+- Push Schema Changes: `supabase db push`
+- Reset Local DB: `supabase db reset`
+- Generate TS Types: `supabase gen types typescript --local > app/src/types/supabase.ts`
+- List Edge Functions: `supabase functions list`
+
+## Seeding Logic
+When updating data, use `supabase db reset` to apply `supabase/seed.sql` or use `psql` via the Supabase CLI to run specific snippets.

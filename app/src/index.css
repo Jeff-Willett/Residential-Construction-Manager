@@ -35,3 +35,41 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--muted);
 }
+
+@media print {
+  @page {
+    size: landscape;
+    margin: 1cm;
+  }
+
+  body {
+    background-color: white !important;
+    color: black !important;
+  }
+
+  /* Hide interaction elements */
+  header, 
+  button, 
+  .zoom-controls,
+  .side-panel,
+  .modal-overlay {
+    display: none !important;
+  }
+
+  /* Make Gantt chart full width */
+  .flex-1 {
+    width: 100% !important;
+    overflow: visible !important;
+  }
+
+  .overflow-auto,
+  .overflow-hidden {
+    overflow: visible !important;
+  }
+
+  /* Ensure colors are printed */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}

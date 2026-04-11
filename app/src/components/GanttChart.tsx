@@ -6,6 +6,7 @@ import { ZoomIn, ZoomOut, AlertTriangle, UserMinus } from 'lucide-react';
 
 export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: string) => void, selectedTaskId: string | null }) {
   const { projects, tasks, deleteProject, vendorColors, activeFilters } = useProjectStore();
+  const [zoomLevel, setZoomLevel] = useState<'day' | 'week' | 'month'>('day');
   const [colWidth, setColWidth] = useState(40);
   const [leftPanelWidth, setLeftPanelWidth] = useState(256);
   const isResizing = useRef(false);
@@ -37,14 +38,13 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
     });
 
     const start = parseISO(minDateStr);
-    const end = addDays(parseISO(maxDateStr), 5); // Add buffer
+    const end = addDays(parseISO(maxDateStr), 30); // Larger buffer for zoomed out views
     
     const dayCount = differenceInDays(end, start) + 1;
     const dateArray = Array.from({ length: dayCount }).map((_, i) => addDays(start, i));
 
-    const getCol = (dateStr: string) => differenceInDays(parseISO(dateStr), start) + 1;
+    const getDayOffset = (dateStr: string) => differenceInDays(parseISO(dateStr), start);
 
-    // Group dates by Month and Week
     const monthGroups: { label: string; days: number }[] = [];
     const weekGroups: { label: string; days: number }[] = [];
 
@@ -65,10 +65,28 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
       }
     });
 
-    return { dates: dateArray, getCol, monthGroups, weekGroups };
-  }, [tasks, projects]);
+    return { dates: dateArray, getDayOffset, monthGroups, weekGroups };
+  }, [tasks, projects, zoomLevel]);
 
-  const { monthGroups = [], weekGroups = [], dates = [], getCol } = datesInfo;
+  const { monthGroups = [], weekGroups = [], dates = [], getDayOffset = () => 0 } = datesInfo;
+
+  // The width of a single day in pixels, based on current zoom
+  const dayWidth = useMemo(() => {
+    if (zoomLevel === 'day') return colWidth;
+    if (zoomLevel === 'week') return colWidth / 7;
+    if (zoomLevel === 'month') return colWidth / 30.44;
+    return colWidth;
+  }, [zoomLevel, colWidth]);
+
+  const totalGridWidth = useMemo(() => {
+    return dates.length * dayWidth;
+  }, [dates, dayWidth]);
+
+  const headerHeight = useMemo(() => {
+    if (zoomLevel === 'day') return 104;
+    if (zoomLevel === 'week') return 64;
+    return 32;
+  }, [zoomLevel]);
 
   // Handle resizing of the left panel
   const handleMouseDown = (_e: React.MouseEvent) => {
@@ -121,8 +139,29 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
     };
   }, [datesInfo]); // Re-sync if dates change
 
-  const handleZoomIn = () => setColWidth(prev => Math.min(prev + 10, 80));
-  const handleZoomOut = () => setColWidth(prev => Math.max(prev - 10, 20));
+  const handleZoomIn = () => {
+    if (zoomLevel === 'month') setZoomLevel('week');
+    else if (zoomLevel === 'week') {
+      setZoomLevel('day');
+      setColWidth(30);
+    } else {
+      setColWidth(prev => Math.min(prev + 10, 80));
+    }
+  };
+
+  const handleZoomOut = () => {
+    if (zoomLevel === 'day') {
+      if (colWidth > 30) {
+        setColWidth(prev => Math.max(prev - 10, 30));
+      } else {
+        setZoomLevel('week');
+        setColWidth(100); // Width of one week
+      }
+    } else if (zoomLevel === 'week') {
+      setZoomLevel('month');
+      setColWidth(300); // Width of one month
+    }
+  };
 
   return (
     <div className="flex flex-col h-full relative">
@@ -145,7 +184,7 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
           className="h-3 overflow-x-auto overflow-y-hidden bg-slate-900 border-b border-slate-700 sticky top-0 z-50 rounded-t-xl"
           style={{ paddingLeft: `${leftPanelWidth}px` }} // Dynamic alignment
         >
-          <div style={{ width: dates.length * colWidth, height: '1px' }} />
+          <div style={{ width: totalGridWidth, height: '1px' }} />
         </div>
       )}
 
@@ -164,7 +203,10 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
             className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-cyan-500/50 transition-colors z-50"
             title="Drag to resize"
           />
-          <div className="h-[104px] border-b border-slate-700 flex items-end pb-2 px-4 text-xs font-semibold text-slate-400 uppercase tracking-wider bg-slate-900 w-full z-10 sticky top-0 shadow-sm">
+          <div 
+            style={{ height: headerHeight }}
+            className="border-b border-slate-700 flex items-end pb-2 px-4 text-xs font-semibold text-slate-400 uppercase tracking-wider bg-slate-900 w-full z-10 sticky top-0 shadow-sm"
+          >
             Task Name
           </div>
           <div className="py-0">
@@ -175,7 +217,10 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
               return (
               <div key={proj.id}>
                 {/* Project Header */}
-                <div className="h-10 bg-slate-800 px-4 flex items-center justify-between text-sm font-bold text-slate-200 border-b border-slate-700 sticky top-[104px] z-20 shadow backdrop-blur">
+                <div 
+                  style={{ height: 40, top: headerHeight }}
+                  className="bg-slate-800 px-4 flex items-center justify-between text-sm font-bold text-slate-200 border-b border-slate-700 sticky z-20 shadow backdrop-blur"
+                >
                   <span>{proj.name}</span>
                   <button onClick={() => { if(confirm('Delete project?')) deleteProject(proj.id); }} className="text-slate-400 hover:text-red-400 transition" title="Delete Project">
                      <UserMinus size={14} />
@@ -227,7 +272,7 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
                 {monthGroups.map((group, i) => (
                   <div 
                     key={i} 
-                    style={{ width: group.days * colWidth }}
+                    style={{ width: group.days * dayWidth }}
                     className="flex-shrink-0 border-r border-slate-700/50 flex items-center px-4 text-[10px] font-bold uppercase tracking-[0.2em] overflow-hidden whitespace-nowrap bg-slate-900/60 backdrop-blur-md"
                   >
                     {group.label}
@@ -236,51 +281,73 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
               </div>
 
               {/* Week Header */}
-              <div className="flex border-b border-slate-700 h-8 bg-slate-800 text-slate-400 sticky top-8 z-30">
-                {weekGroups.map((group, i) => (
-                  <div 
-                    key={i} 
-                    style={{ width: group.days * colWidth }}
-                    className="flex-shrink-0 border-r border-slate-700/50 flex items-center px-4 text-[9px] font-bold overflow-hidden whitespace-nowrap backdrop-blur-md"
-                  >
-                    {colWidth > 20 && group.label}
-                  </div>
-                ))}
-              </div>
-
-              {/* Header Days */}
-              <div className="flex border-b border-slate-700 h-10 sticky top-[64px] z-30 shadow-sm backdrop-blur">
-                {dates.map((date, i) => {
-                  const isWknd = isWeekend(date);
-                  return (
+              {(zoomLevel === 'day' || zoomLevel === 'week') && (
+                <div className="flex border-b border-slate-700 h-8 bg-slate-800 text-slate-400 sticky top-8 z-30">
+                  {weekGroups.map((group, i) => (
                     <div 
                       key={i} 
-                      style={{ minWidth: colWidth }}
-                      className={clsx(
-                        "flex-shrink-0 border-r border-slate-700/50 flex flex-col items-center justify-center text-[10px]",
-                        isWknd ? "bg-slate-800/90 text-slate-500" : "bg-slate-800 border-b border-b-cyan-500/30 text-slate-300"
-                      )}
+                      style={{ width: group.days * dayWidth }}
+                      className="flex-shrink-0 border-r border-slate-700/50 flex items-center px-4 text-[9px] font-bold overflow-hidden whitespace-nowrap backdrop-blur-md"
                     >
-                      {colWidth > 25 && <span className="opacity-60 truncate font-medium">{format(date, 'eee')}</span>}
-                      <span className={clsx(isWknd ? "text-slate-500" : "text-white font-bold")}>{format(date, 'd')}</span>
+                      {dayWidth * 7 > 40 && group.label}
                     </div>
-                  );
-                })}
-              </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Header Days - Only visible in Day zoom */}
+              {zoomLevel === 'day' && (
+                <div className="flex border-b border-slate-700 h-10 sticky top-[64px] z-30 shadow-sm backdrop-blur">
+                  {dates.map((date, i) => {
+                    const isWknd = isWeekend(date);
+                    return (
+                      <div 
+                        key={i} 
+                        style={{ minWidth: colWidth }}
+                        className={clsx(
+                          "flex-shrink-0 border-r border-slate-700/50 flex flex-col items-center justify-center text-[10px]",
+                          isWknd ? "bg-slate-800/90 text-slate-500" : "bg-slate-800 border-b border-b-cyan-500/30 text-slate-300"
+                        )}
+                      >
+                        {colWidth > 25 && <span className="opacity-60 truncate font-medium">{format(date, 'eee')}</span>}
+                        <span className={clsx(isWknd ? "text-slate-500" : "text-white font-bold")}>{format(date, 'd')}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
 
               {/* Grid Body */}
-              <div className="relative" style={{ width: dates.length * colWidth }}>
+              <div className="relative" style={{ width: totalGridWidth }}>
                 <div className="absolute inset-0 flex pointer-events-none">
-                  {dates.map((date, i) => (
-                    <div 
-                      key={i} 
-                      style={{ minWidth: colWidth }}
-                      className={clsx(
-                        "border-r border-slate-700/20",
-                        isWeekend(date) && "bg-slate-800/40"
-                      )}
-                    />
-                  ))}
+                  {zoomLevel === 'day' ? (
+                    dates.map((date, i) => (
+                      <div 
+                        key={i} 
+                        style={{ minWidth: dayWidth }}
+                        className={clsx(
+                          "border-r border-slate-700/20",
+                          isWeekend(date) && "bg-slate-800/40"
+                        )}
+                      />
+                    ))
+                  ) : zoomLevel === 'week' ? (
+                    weekGroups.map((_, i) => (
+                      <div 
+                        key={i} 
+                        style={{ minWidth: colWidth }}
+                        className="border-r border-slate-700/40 bg-slate-800/20"
+                      />
+                    ))
+                  ) : (
+                    monthGroups.map((_, i) => (
+                      <div 
+                        key={i} 
+                        style={{ minWidth: colWidth }}
+                        className="border-r border-slate-700/40 bg-slate-900/40"
+                      />
+                    ))
+                  )}
                 </div>
 
                 {projects.map(proj => {
@@ -293,22 +360,22 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
                     {projectTasks.map((task) => {
                       if (!task.calculated_start || !task.calculated_finish) return <div key={task.id} className="h-8" />;
                       
-                      const startCol = getCol(task.calculated_start);
-                      const endCol = getCol(task.calculated_finish);
-                      const span = endCol - startCol + 1;
+                      const startDay = getDayOffset(task.calculated_start);
+                      const endDay = getDayOffset(task.calculated_finish);
+                      const daySpan = endDay - startDay + 1;
 
                       const isDelayed = (task.delay_days || 0) > 0;
                       const customColor = task.subcontractor ? vendorColors[task.subcontractor] : null;
 
                       return (
                         <div key={task.id} className="h-8 border-b border-slate-700/30 relative flex items-center group">
-                          {isDelayed && task.logic_start && (
+                           {isDelayed && task.logic_start && (
                              // Draw a dashed ghost bar for delay origin
                              <div 
                                className="absolute h-[10px] rounded-sm bg-slate-600/30 border border-slate-500 border-dashed z-0"
                                style={{
-                                 left: `${(getCol(task.logic_start) - 1) * colWidth + 4}px`,
-                                 width: `${Math.max(((startCol - getCol(task.logic_start)) * colWidth), 0)}px`,
+                                 left: `${getDayOffset(task.logic_start) * dayWidth + 4}px`,
+                                 width: `${Math.max(((getDayOffset(task.calculated_start) - getDayOffset(task.logic_start)) * dayWidth), 0)}px`,
                                }}
                              />
                           )}
@@ -325,12 +392,12 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
                               selectedTaskId === task.id && "ring-2 ring-white ring-offset-1 ring-offset-slate-900 scale-105"
                             )}
                             style={{
-                              left: `${(startCol - 1) * colWidth + 4}px`,
-                              width: `${span * colWidth - 8}px`,
+                              left: `${startDay * dayWidth + 4}px`,
+                              width: `${daySpan * dayWidth - 8}px`,
                               ...(customColor ? { backgroundColor: customColor } : {})
                             }}
                           >
-                             {colWidth > 30 && (
+                             {dayWidth * daySpan > 30 && (
                                <span className={clsx(
                                  "text-[10px] font-bold text-white drop-shadow-md truncate px-1 rounded",
                                  task.lag < 0 && "bg-orange-600/50"

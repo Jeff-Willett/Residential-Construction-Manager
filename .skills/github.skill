@@ -1,0 +1,20 @@
+# GitHub Management Skill
+# Use this skill to interact with GitHub via the `gh` CLI.
+
+## Core Instructions
+- **Command Base**: Always use `gh`. If `gh` is not found, attempt to use `/opt/homebrew/bin/gh`.
+- **Status Check**: Before starting work, run `gh pr list` or `gh issue list` to sync with the team/repo status.
+- **Workflow**: 
+  - Create branches using `git checkout -b`.
+  - Push and create PRs using `gh pr create --fill`.
+  - Check CI/CD status with `gh run list`.
+
+## Common Commands
+- List Issues: `gh issue list`
+- View Issue: `gh issue view <number>`
+- Create PR: `gh pr create --title "Feature: <name>" --body "<description>"`
+- Check PR Status: `gh pr status`
+- Merge PR: `gh pr merge --squash --delete-branch`
+
+## Auth Note
+If you see "not logged in", ask the user to run `gh auth login` in their terminal.
