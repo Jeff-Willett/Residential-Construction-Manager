@@ -4,13 +4,29 @@ import { GanttChart } from './components/GanttChart';
 import { SidePanel } from './components/SidePanel';
 import { VendorColorModal } from './components/VendorColorModal';
 import { FilterModal } from './components/FilterModal';
-import { Settings, Filter, RotateCcw, RotateCw } from 'lucide-react';
+import { TemplateStudioModal } from './components/TemplateStudioModal';
+import { Settings, Filter, RotateCcw, RotateCw, FileText } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 
 function App() {
-  const { projects, tasks, isLoading, error, fetchData, activeFilters, undo, undoStack, redo, redoStack } = useProjectStore();
+  const { projects, tasks, isLoading, error, fetchData, activeFilters, undo, undoStack, redo, redoStack } = useProjectStore(
+    useShallow((state) => ({
+      projects: state.projects,
+      tasks: state.tasks,
+      isLoading: state.isLoading,
+      error: state.error,
+      fetchData: state.fetchData,
+      activeFilters: state.activeFilters,
+      undo: state.undo,
+      undoStack: state.undoStack,
+      redo: state.redo,
+      redoStack: state.redoStack
+    }))
+  );
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
+  const [isTemplateStudioOpen, setIsTemplateStudioOpen] = useState(false);
 
   const activeFilterCount = activeFilters.vendors.length + activeFilters.scopes.length;
 
@@ -18,7 +34,7 @@ function App() {
     fetchData();
   }, [fetchData]);
 
-  const selectedTask = selectedTaskId ? tasks.find(t => t.id === selectedTaskId) : undefined;
+  const selectedTask = selectedTaskId ? tasks.find((task) => task.id === selectedTaskId) : undefined;
 
   return (
     <div className="flex h-screen bg-slate-900 text-slate-50 font-sans">
@@ -48,6 +64,13 @@ function App() {
                    {activeFilterCount}
                  </span>
                )}
+             </button>
+             <button
+               onClick={() => setIsTemplateStudioOpen(true)}
+               className="p-2 bg-slate-800 hover:bg-slate-700 rounded-md border border-slate-700 shadow-sm transition-colors text-slate-300 hover:text-white"
+               title="Scheduling Template Studio"
+             >
+               <FileText size={20} />
              </button>
               <button
                 onClick={() => setIsSettingsOpen(true)}
@@ -121,6 +144,7 @@ function App() {
       {/* Side Panel */}
       {selectedTask && (
         <SidePanel 
+          key={selectedTask.id}
           task={selectedTask} 
           onClose={() => setSelectedTaskId(null)} 
         />
@@ -134,6 +158,11 @@ function App() {
       {/* Filter Modal */}
       {isFilterOpen && (
         <FilterModal onClose={() => setIsFilterOpen(false)} />
+      )}
+
+      {/* Template Studio */}
+      {isTemplateStudioOpen && (
+        <TemplateStudioModal onClose={() => setIsTemplateStudioOpen(false)} />
       )}
     </div>
   );

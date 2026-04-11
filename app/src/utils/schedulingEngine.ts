@@ -88,6 +88,7 @@ export function calculateScheduleEngine(
   tasks: EngineTask[], 
   dependencies: EngineDependency[]
 ): EngineTask[] {
+  const projectById = new Map(projects.map((project) => [project.id, project]));
   
   // Track vendor busy dates globally across all projects
   // Map of vendorName -> state
@@ -118,7 +119,7 @@ export function calculateScheduleEngine(
   inDegree.forEach((degree, id) => {
     if (degree === 0) {
       const t = taskMap.get(id)!;
-      const proj = projects.find(p => p.id === t.project_id);
+      const proj = projectById.get(t.project_id);
       
       const baseStart = proj ? proj.start_date : format(new Date(), 'yyyy-MM-dd');
       t.logic_start = addWorkingDays(baseStart, t.lag || 0);
@@ -137,8 +138,8 @@ export function calculateScheduleEngine(
         const timeB = parseISO(tb.logic_start!).getTime();
         if (timeA !== timeB) return timeA - timeB;
         
-        const pa = projects.find(p => p.id === ta.project_id);
-        const pb = projects.find(p => p.id === tb.project_id);
+        const pa = projectById.get(ta.project_id);
+        const pb = projectById.get(tb.project_id);
         const pTimeA = pa ? parseISO(pa.start_date).getTime() : 0;
         const pTimeB = pb ? parseISO(pb.start_date).getTime() : 0;
         return pTimeA - pTimeB;
