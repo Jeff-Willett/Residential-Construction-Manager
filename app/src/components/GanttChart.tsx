@@ -332,19 +332,19 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
                       />
                     ))
                   ) : zoomLevel === 'week' ? (
-                    weekGroups.map((_, i) => (
+                    weekGroups.map((group, i) => (
                       <div 
                         key={i} 
-                        style={{ minWidth: colWidth }}
-                        className="border-r border-slate-700/40 bg-slate-800/20"
+                        style={{ minWidth: group.days * dayWidth }}
+                        className="border-r border-slate-700/40 bg-slate-800/20 box-border"
                       />
                     ))
                   ) : (
-                    monthGroups.map((_, i) => (
+                    monthGroups.map((group, i) => (
                       <div 
                         key={i} 
-                        style={{ minWidth: colWidth }}
-                        className="border-r border-slate-700/40 bg-slate-900/40"
+                        style={{ minWidth: group.days * dayWidth }}
+                        className="border-r border-slate-700/40 bg-slate-900/40 box-border"
                       />
                     ))
                   )}
