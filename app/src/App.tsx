@@ -48,7 +48,7 @@ function App() {
             <p className="text-sm text-slate-400 flex items-center">
               Residential Construction Manager
               <span className="ml-2 px-1.5 py-0.5 bg-slate-800 text-slate-500 text-[10px] rounded border border-slate-700 font-mono">
-                v0.0.8
+                v0.0.9
               </span>
             </p>
           </div>
