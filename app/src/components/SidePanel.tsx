@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useProjectStore } from '../store/projectStore';
 import type { EngineTask } from '../utils/schedulingEngine';
 import { X, Clock, CalendarDays, AlertTriangle } from 'lucide-react';
@@ -51,13 +51,6 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
 
   const uniqueVendors = Array.from(new Set(tasks.map(t => t.subcontractor).filter(Boolean))) as string[];
   uniqueVendors.sort();
-
-  useEffect(() => {
-    setDurationInput(task.duration.toString());
-    setVendorInput(task.subcontractor || '');
-    setStartDateStr(task.calculated_start || '');
-    setFinishDateStr(task.calculated_finish || '');
-  }, [task]);
 
   const handleDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       const dur = parseInt(e.target.value, 10);
