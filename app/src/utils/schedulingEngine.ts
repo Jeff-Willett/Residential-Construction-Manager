@@ -58,8 +58,12 @@ export interface Project {
 export interface EngineTask {
   id: string;
   project_id: string;
+  project_phase_id: string | null;
   template_id: string | null;
   name: string;
+  phase_name: string | null;
+  phase_order: number;
+  task_order: number;
   subcontractor: string | null;
   bottleneck_vendor: string | null;
   duration: number; // working days

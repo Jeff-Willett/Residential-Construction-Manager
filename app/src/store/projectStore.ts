@@ -4,11 +4,28 @@ import { supabase } from '../lib/supabase';
 
 export interface TaskTemplate {
   id: string;
+  phase_template_id: string | null;
+  phase_name: string | null;
+  phase_order: number;
   task_order: number;
   scope: string;
   subcontractor: string | null;
   default_days: number;
   bottleneck_vendor: string | null;
+}
+
+export interface PhaseTemplate {
+  id: string;
+  name: string;
+  phase_order: number;
+}
+
+export interface ProjectPhase {
+  id: string;
+  project_id: string;
+  phase_template_id: string | null;
+  name: string;
+  phase_order: number;
 }
 
 export interface TemplateDependency {
@@ -37,6 +54,8 @@ interface ProjectState {
   projects: Project[];
   tasks: EngineTask[];
   dependencies: EngineDependency[];
+  phaseTemplates: PhaseTemplate[];
+  projectPhases: ProjectPhase[];
   templates: TaskTemplate[];
   templateDependencies: TemplateDependency[];
   isLoading: boolean;
@@ -63,6 +82,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       projects: [],
       tasks: [],
       dependencies: [],
+      phaseTemplates: [],
+      projectPhases: [],
       templates: [],
       templateDependencies: [],
       isLoading: true,
@@ -103,6 +124,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         { data: projectsData, error: projErr },
         { data: tasksData, error: tasksErr },
         { data: depsData, error: depsErr },
+        { data: phaseTemplatesData, error: phaseTemplatesErr },
+        { data: projectPhasesData, error: projectPhasesErr },
         { data: tempData, error: tempErr },
         { data: tempDepsData, error: tempDepsErr },
         { data: vendorColorsData, error: vendorColorsErr }
@@ -110,6 +133,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         supabase.from('projects').select('*').order('start_date', { ascending: true }),
         supabase.from('tasks').select('*'),
         supabase.from('dependencies').select('*'),
+        supabase.from('phase_templates').select('*').order('phase_order', { ascending: true }),
+        supabase.from('project_phases').select('*').order('phase_order', { ascending: true }),
         supabase.from('task_templates').select('*').order('task_order', { ascending: true }),
         supabase.from('template_dependencies').select('*'),
         supabase.from('vendor_colors').select('*')
@@ -118,6 +143,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       if (projErr) throw projErr;
       if (tasksErr) throw tasksErr;
       if (depsErr) throw depsErr;
+      if (phaseTemplatesErr) throw phaseTemplatesErr;
+      if (projectPhasesErr) throw projectPhasesErr;
       if (tempErr) throw tempErr;
       if (tempDepsErr) throw tempDepsErr;
       if (vendorColorsErr) console.error('Failed to fetch vendor colors:', vendorColorsErr);
@@ -130,14 +157,20 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }
 
       const projects = projectsData || [];
+      const phaseTemplates = phaseTemplatesData || [];
+      const projectPhases = projectPhasesData || [];
       const templates = tempData || [];
       const templateDependencies = tempDepsData || [];
 
       const fetchedTasks: EngineTask[] = (tasksData || []).map((t: any) => ({
         id: t.id,
         project_id: t.project_id,
+        project_phase_id: t.project_phase_id,
         template_id: t.template_id,
         name: t.name,
+        phase_name: t.phase_name,
+        phase_order: t.phase_order || 0,
+        task_order: t.task_order || 0,
         subcontractor: t.subcontractor,
         bottleneck_vendor: t.bottleneck_vendor,
         duration: t.duration || 1,
@@ -160,6 +193,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
          const startA = a.calculated_start ? new Date(a.calculated_start).getTime() : 0;
          const startB = b.calculated_start ? new Date(b.calculated_start).getTime() : 0;
          if (startA !== startB) return startA - startB;
+         if (a.phase_order !== b.phase_order) return a.phase_order - b.phase_order;
+         if (a.task_order !== b.task_order) return a.task_order - b.task_order;
          return a.name.localeCompare(b.name);
       });
 
@@ -167,6 +202,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         projects, 
         tasks: recalculated, 
         dependencies: fetchedDeps, 
+        phaseTemplates,
+        projectPhases,
         templates, 
         templateDependencies,
         vendorColors: computedColors,
@@ -179,7 +216,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   addProject: async (name: string, startDate: string) => {
-    const { templates, templateDependencies } = get();
+    const { phaseTemplates, templates, templateDependencies } = get();
     // 1. Insert Project
     const { data: projData, error: projErr } = await supabase
       .from('projects')
@@ -194,16 +231,45 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
     const projectId = projData.id;
 
-    if (templates.length === 0) {
+    if (phaseTemplates.length === 0 || templates.length === 0) {
       await get().fetchData();
       return;
     }
 
-    // 2. Insert Tasks from Templates
+    // 2. Insert Project Phases from Templates
+    const phaseInserts = phaseTemplates.map((phase) => ({
+      project_id: projectId,
+      phase_template_id: phase.id,
+      name: phase.name,
+      phase_order: phase.phase_order
+    }));
+
+    const { data: insertedPhases, error: phasesErr } = await supabase
+      .from('project_phases')
+      .insert(phaseInserts)
+      .select();
+
+    if (phasesErr || !insertedPhases) {
+      console.error('Failed to insert project phases:', phasesErr);
+      return;
+    }
+
+    const phaseTemplateToProjectPhaseMap = new Map<string, string>();
+    insertedPhases.forEach((phase: any) => {
+      if (phase.phase_template_id) {
+        phaseTemplateToProjectPhaseMap.set(phase.phase_template_id, phase.id);
+      }
+    });
+
+    // 3. Insert Tasks from Templates
     const taskInserts = templates.map(t => ({
       project_id: projectId,
+      project_phase_id: t.phase_template_id ? phaseTemplateToProjectPhaseMap.get(t.phase_template_id) ?? null : null,
       template_id: t.id,
       name: t.scope,
+      phase_name: t.phase_name,
+      phase_order: t.phase_order,
+      task_order: t.task_order,
       subcontractor: t.subcontractor,
       bottleneck_vendor: t.bottleneck_vendor,
       duration: t.default_days,
@@ -220,7 +286,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       return;
     }
 
-    // 3. Insert Dependencies
+    // 4. Insert Dependencies
     // We must map template_id -> new task id
     const templateToTaskMap = new Map<string, string>();
     insertedTasks.forEach(t => templateToTaskMap.set(t.template_id, t.id));
@@ -249,138 +315,162 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   updateTaskDuration: async (taskId: string, duration: number) => {
-    const task = get().tasks.find(t => t.id === taskId);
-    if (task) {
-      const entry: TaskUndoEntry = {
-        type: 'TASK_UPDATE',
-        taskId,
-        prev: { duration: task.duration }
-      };
-      set(state => ({ 
-        undoStack: [entry, ...state.undoStack].slice(0, 50),
-        redoStack: []
-      }));
-    }
+    const { tasks, projects, dependencies } = get();
+    const task = tasks.find(t => t.id === taskId);
+    if (!task) return;
 
-    // Optimistic update logic could go here, but for simplicity we await db save so logic engine syncs
+    // 1. History for Undo
+    const entry: TaskUndoEntry = {
+      type: 'TASK_UPDATE',
+      taskId,
+      prev: { duration: task.duration }
+    };
+
+    // 2. Optimistic Update & Local Recalculation
+    const updatedTasks = tasks.map(t => 
+      t.id === taskId ? { ...t, duration: Math.max(1, duration) } : t
+    );
+    const recalculated = calculateScheduleEngine(projects, updatedTasks, dependencies);
+    
+    set(state => ({ 
+      tasks: recalculated,
+      undoStack: [entry, ...state.undoStack].slice(0, 50),
+      redoStack: []
+    }));
+
+    // 3. Background Sync
     const { error } = await supabase.from('tasks').update({ duration: Math.max(1, duration) }).eq('id', taskId);
-    if (!error) {
-       await get().fetchData();
+    if (error) {
+       console.error('Failed to sync duration to DB:', error);
+       // Revert or show error if critical
     }
   },
 
   updateTaskLag: async (taskId: string, lag: number) => {
-    const task = get().tasks.find(t => t.id === taskId);
-    if (task) {
-      const entry: TaskUndoEntry = {
-        type: 'TASK_UPDATE',
-        taskId,
-        prev: { lag: task.lag }
-      };
-      set(state => ({ 
-        undoStack: [entry, ...state.undoStack].slice(0, 50),
-        redoStack: []
-      }));
-    }
+    const { tasks, projects, dependencies } = get();
+    const task = tasks.find(t => t.id === taskId);
+    if (!task) return;
+
+    const entry: TaskUndoEntry = {
+      type: 'TASK_UPDATE',
+      taskId,
+      prev: { lag: task.lag }
+    };
+
+    const updatedTasks = tasks.map(t => 
+      t.id === taskId ? { ...t, lag } : t
+    );
+    const recalculated = calculateScheduleEngine(projects, updatedTasks, dependencies);
+
+    set(state => ({ 
+      tasks: recalculated,
+      undoStack: [entry, ...state.undoStack].slice(0, 50),
+      redoStack: []
+    }));
 
     const { error } = await supabase.from('tasks').update({ lag }).eq('id', taskId);
-    if (!error) {
-       await get().fetchData();
-    }
+    if (error) console.error('Failed to sync lag to DB:', error);
   },
 
   updateTaskSubcontractor: async (taskId: string, subcontractor: string | null, bottleneck_vendor: string | null) => {
-    const task = get().tasks.find(t => t.id === taskId);
-    if (task) {
-      const entry: TaskUndoEntry = {
-        type: 'TASK_UPDATE',
-        taskId,
-        prev: { subcontractor: task.subcontractor, bottleneck_vendor: task.bottleneck_vendor }
-      };
-      set(state => ({ 
-        undoStack: [entry, ...state.undoStack].slice(0, 50),
-        redoStack: []
-      }));
-    }
+    const { tasks, projects, dependencies } = get();
+    const task = tasks.find(t => t.id === taskId);
+    if (!task) return;
+
+    const entry: TaskUndoEntry = {
+      type: 'TASK_UPDATE',
+      taskId,
+      prev: { subcontractor: task.subcontractor, bottleneck_vendor: task.bottleneck_vendor }
+    };
+
+    const updatedTasks = tasks.map(t => 
+      t.id === taskId ? { ...t, subcontractor, bottleneck_vendor } : t
+    );
+    const recalculated = calculateScheduleEngine(projects, updatedTasks, dependencies);
+
+    set(state => ({ 
+      tasks: recalculated,
+      undoStack: [entry, ...state.undoStack].slice(0, 50),
+      redoStack: []
+    }));
 
     const { error } = await supabase.from('tasks').update({ subcontractor, bottleneck_vendor }).eq('id', taskId);
-    if (!error) {
-       await get().fetchData();
-    }
+    if (error) console.error('Failed to sync subcontractor to DB:', error);
   },
 
   undo: async () => {
-    const stack = get().undoStack;
-    if (stack.length === 0) return;
+    const { undoStack, redoStack, tasks, projects, dependencies } = get();
+    if (undoStack.length === 0) return;
 
-    const [lastAction, ...remainingStack] = stack;
-    
-    // Capture current state for redo BEFORE applying undo
-    const task = get().tasks.find(t => t.id === lastAction.taskId);
-    if (task) {
-        const redoEntry: TaskUndoEntry = {
-            type: 'TASK_UPDATE',
-            taskId: lastAction.taskId,
-            prev: {}
-        };
-        // Fill prev with current values that are about to be overwritten
-        if ('duration' in lastAction.prev) redoEntry.prev.duration = task.duration;
-        if ('lag' in lastAction.prev) redoEntry.prev.lag = task.lag;
-        if ('subcontractor' in lastAction.prev) {
-            redoEntry.prev.subcontractor = task.subcontractor;
-            redoEntry.prev.bottleneck_vendor = task.bottleneck_vendor;
-        }
+    const [lastAction, ...remainingStack] = undoStack;
+    const task = tasks.find(t => t.id === lastAction.taskId);
+    if (!task) return;
 
-        set(state => ({ 
-            undoStack: remainingStack,
-            redoStack: [redoEntry, ...state.redoStack].slice(0, 50)
-        }));
-
-        const { error } = await supabase
-            .from('tasks')
-            .update(lastAction.prev)
-            .eq('id', lastAction.taskId);
-        
-        if (!error) {
-            await get().fetchData();
-        }
+    // 1. Prepare Redo Entry
+    const redoEntry: TaskUndoEntry = {
+      type: 'TASK_UPDATE',
+      taskId: lastAction.taskId,
+      prev: {}
+    };
+    if ('duration' in lastAction.prev) redoEntry.prev.duration = task.duration;
+    if ('lag' in lastAction.prev) redoEntry.prev.lag = task.lag;
+    if ('subcontractor' in lastAction.prev) {
+      redoEntry.prev.subcontractor = task.subcontractor;
+      redoEntry.prev.bottleneck_vendor = task.bottleneck_vendor;
     }
+
+    // 2. Apply Locally & Recalculate
+    const updatedTasks = tasks.map(t => 
+      t.id === lastAction.taskId ? { ...t, ...lastAction.prev } : t
+    );
+    const recalculated = calculateScheduleEngine(projects, updatedTasks, dependencies);
+
+    set({ 
+      tasks: recalculated,
+      undoStack: remainingStack,
+      redoStack: [redoEntry, ...redoStack].slice(0, 50)
+    });
+
+    // 3. Background Sync
+    const { error } = await supabase.from('tasks').update(lastAction.prev).eq('id', lastAction.taskId);
+    if (error) console.error('Failed to sync undo to DB:', error);
   },
 
   redo: async () => {
-    const stack = get().redoStack;
-    if (stack.length === 0) return;
+    const { undoStack, redoStack, tasks, projects, dependencies } = get();
+    if (redoStack.length === 0) return;
 
-    const [nextAction, ...remainingStack] = stack;
+    const [nextAction, ...remainingStack] = redoStack;
+    const task = tasks.find(t => t.id === nextAction.taskId);
+    if (!task) return;
 
-    // Capture current state for undo BEFORE applying redo
-    const task = get().tasks.find(t => t.id === nextAction.taskId);
-    if (task) {
-        const undoEntry: TaskUndoEntry = {
-            type: 'TASK_UPDATE',
-            taskId: nextAction.taskId,
-            prev: {}
-        };
-        if ('duration' in nextAction.prev) undoEntry.prev.duration = task.duration;
-        if ('lag' in nextAction.prev) undoEntry.prev.lag = task.lag;
-        if ('subcontractor' in nextAction.prev) {
-            undoEntry.prev.subcontractor = task.subcontractor;
-            undoEntry.prev.bottleneck_vendor = task.bottleneck_vendor;
-        }
-
-        set(state => ({ 
-            redoStack: remainingStack,
-            undoStack: [undoEntry, ...state.undoStack].slice(0, 50)
-        }));
-
-        const { error } = await supabase
-            .from('tasks')
-            .update(nextAction.prev)
-            .eq('id', nextAction.taskId);
-        
-        if (!error) {
-            await get().fetchData();
-        }
+    // 1. Prepare Undo Entry
+    const undoEntry: TaskUndoEntry = {
+      type: 'TASK_UPDATE',
+      taskId: nextAction.taskId,
+      prev: {}
+    };
+    if ('duration' in nextAction.prev) undoEntry.prev.duration = task.duration;
+    if ('lag' in nextAction.prev) undoEntry.prev.lag = task.lag;
+    if ('subcontractor' in nextAction.prev) {
+      undoEntry.prev.subcontractor = task.subcontractor;
+      undoEntry.prev.bottleneck_vendor = task.bottleneck_vendor;
     }
+
+    // 2. Apply Locally & Recalculate
+    const updatedTasks = tasks.map(t => 
+      t.id === nextAction.taskId ? { ...t, ...nextAction.prev } : t
+    );
+    const recalculated = calculateScheduleEngine(projects, updatedTasks, dependencies);
+
+    set({ 
+      tasks: recalculated,
+      redoStack: remainingStack,
+      undoStack: [undoEntry, ...undoStack].slice(0, 50)
+    });
+
+    // 3. Background Sync
+    const { error } = await supabase.from('tasks').update(nextAction.prev).eq('id', nextAction.taskId);
+    if (error) console.error('Failed to sync redo to DB:', error);
   }
 }));
