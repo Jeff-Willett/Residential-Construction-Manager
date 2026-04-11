@@ -266,7 +266,7 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
         {/* Right Side: Timeline Grid */}
         <div className="flex-1 relative pb-8">
           <div className="inline-flex min-w-full">
-            <div className="flex flex-col w-full relative">
+            <div className="flex flex-col relative" style={{ width: totalGridWidth }}>
               {/* Month Header */}
               <div className="flex border-b border-slate-700 h-8 bg-slate-900 text-slate-300 sticky top-0 z-30">
                 {monthGroups.map((group, i) => (
@@ -317,37 +317,38 @@ export function GanttChart({ onTaskClick, selectedTaskId }: { onTaskClick: (id: 
                 </div>
               )}
 
-              {/* Grid Body */}
-              <div className="relative" style={{ width: totalGridWidth }}>
+              {/* Grid Body with optimized background patterns */}
+              <div 
+                className="relative" 
+                style={{ 
+                  width: totalGridWidth,
+                  backgroundImage: zoomLevel === 'day' 
+                    ? `repeating-linear-gradient(to right, rgba(30, 41, 59, 0.2) 0px, rgba(30, 41, 59, 0.2) ${dayWidth - 1}px, rgba(51, 65, 85, 0.1) ${dayWidth - 1}px, rgba(51, 65, 85, 0.1) ${dayWidth}px)`
+                    : zoomLevel === 'week'
+                    ? `repeating-linear-gradient(to right, rgba(30, 41, 59, 0.15) 0px, rgba(30, 41, 59, 0.15) ${dayWidth * 7 - 1}px, rgba(51, 65, 85, 0.2) ${dayWidth * 7 - 1}px, rgba(51, 65, 85, 0.2) ${dayWidth * 7}px)`
+                    : 'none',
+                  backgroundSize: zoomLevel === 'day' ? `${dayWidth}px 100%` : `${dayWidth * 7}px 100%`
+                }}
+              >
+                {/* Month boundaries needed in all view levels for visual structure */}
                 <div className="absolute inset-0 flex pointer-events-none">
-                  {zoomLevel === 'day' ? (
-                    dates.map((date, i) => (
+                  {monthGroups.map((group, i) => (
+                    <div 
+                      key={i} 
+                      style={{ minWidth: group.days * dayWidth, flexShrink: 0 }}
+                      className="border-r border-slate-700/30"
+                    />
+                  ))}
+                  {/* Weekend overlays only in detailed day view */}
+                  {zoomLevel === 'day' && dates.map((date, i) => (
+                    isWeekend(date) ? (
                       <div 
                         key={i} 
-                        style={{ minWidth: dayWidth }}
-                        className={clsx(
-                          "border-r border-slate-700/20",
-                          isWeekend(date) && "bg-slate-800/40"
-                        )}
+                        style={{ position: 'absolute', left: i * dayWidth, width: dayWidth, height: '100%' }}
+                        className="bg-slate-800/10"
                       />
-                    ))
-                  ) : zoomLevel === 'week' ? (
-                    weekGroups.map((group, i) => (
-                      <div 
-                        key={i} 
-                        style={{ minWidth: group.days * dayWidth }}
-                        className="border-r border-slate-700/40 bg-slate-800/20 box-border"
-                      />
-                    ))
-                  ) : (
-                    monthGroups.map((group, i) => (
-                      <div 
-                        key={i} 
-                        style={{ minWidth: group.days * dayWidth }}
-                        className="border-r border-slate-700/40 bg-slate-900/40 box-border"
-                      />
-                    ))
-                  )}
+                    ) : null
+                  ))}
                 </div>
 
                 {projects.map(proj => {
