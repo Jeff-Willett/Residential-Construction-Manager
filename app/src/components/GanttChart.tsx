@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { differenceInDays, addDays, endOfWeek, format, isWeekend, startOfWeek, parseISO } from 'date-fns';
 import { clsx } from 'clsx';
-import { ZoomIn, ZoomOut, AlertTriangle, UserMinus, ChevronDown, ChevronRight } from 'lucide-react';
+import { ZoomIn, ZoomOut, AlertTriangle, UserMinus, ChevronDown, ChevronRight, Lightbulb, LightbulbOff } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { useProjectStore } from '../store/projectStore';
 import type { EngineTask } from '../utils/schedulingEngine';
@@ -95,6 +95,8 @@ export function GanttChart({
   const [zoomLevel, setZoomLevel] = useState<ZoomLevel>('day');
   const [leftPanelWidth, setLeftPanelWidth] = useState(272);
   const [expandedPhases, setExpandedPhases] = useState<Record<string, boolean>>({});
+  const [hiddenProjectBars, setHiddenProjectBars] = useState<Record<string, boolean>>({});
+  const [hiddenPhaseBars, setHiddenPhaseBars] = useState<Record<string, boolean>>({});
 
   const isResizing = useRef(false);
   const mainScrollRef = useRef<HTMLDivElement>(null);
@@ -104,13 +106,14 @@ export function GanttChart({
   const pendingZoomFocusDay = useRef<number | null>(null);
 
   const visibleTasks = useMemo(() => {
-    const { vendors, scopes } = activeFilters;
-    if (vendors.length === 0 && scopes.length === 0) return tasks;
+    const { projects: projectIds, vendors, scopes } = activeFilters;
+    if (projectIds.length === 0 && vendors.length === 0 && scopes.length === 0) return tasks;
 
     return tasks.filter((task) => {
+      const matchProject = projectIds.length === 0 || projectIds.includes(task.project_id);
       const matchVendor = vendors.length === 0 || (task.subcontractor && vendors.includes(task.subcontractor));
       const matchScope = scopes.length === 0 || scopes.includes(task.name);
-      return matchVendor && matchScope;
+      return matchProject && matchVendor && matchScope;
     });
   }, [tasks, activeFilters]);
 
@@ -248,6 +251,7 @@ export function GanttChart({
 
   const { chartRows, phaseIdsByProject, projectHasCollapsedPhase } = chartMeta;
   const allPhaseIds = useMemo(() => Array.from(phaseIdsByProject.values()).flat(), [phaseIdsByProject]);
+  const visibleProjectIds = useMemo(() => Array.from(phaseIdsByProject.keys()), [phaseIdsByProject]);
 
   const datesInfo = useMemo(() => {
     if (visibleTasks.length === 0 || projects.length === 0) {
@@ -412,6 +416,72 @@ export function GanttChart({
     });
   };
 
+  const toggleProjectBarVisibility = (projectId: string) => {
+    const shouldHide = !(hiddenProjectBars[projectId] ?? false);
+
+    setHiddenProjectBars((current) => ({
+      ...current,
+      [projectId]: shouldHide
+    }));
+
+    if (shouldHide) {
+      const projectPhaseIds = phaseIdsByProject.get(projectId) ?? [];
+      setHiddenPhaseBars((current) => {
+        const next = { ...current };
+        projectPhaseIds.forEach((phaseId) => {
+          next[phaseId] = true;
+        });
+        return next;
+      });
+    }
+  };
+
+  const togglePhaseBarVisibility = (phaseId: string) => {
+    setHiddenPhaseBars((current) => ({
+      ...current,
+      [phaseId]: !(current[phaseId] ?? false)
+    }));
+  };
+
+  const toggleAllProjectBars = () => {
+    if (visibleProjectIds.length === 0) return;
+
+    const shouldHideAllProjects = visibleProjectIds.some((projectId) => !(hiddenProjectBars[projectId] ?? false));
+
+    setHiddenProjectBars((current) => {
+      const next = { ...current };
+      visibleProjectIds.forEach((projectId) => {
+        next[projectId] = shouldHideAllProjects;
+      });
+      return next;
+    });
+
+    if (shouldHideAllProjects) {
+      setHiddenPhaseBars((current) => {
+        const next = { ...current };
+        allPhaseIds.forEach((phaseId) => {
+          next[phaseId] = true;
+        });
+        return next;
+      });
+      return;
+    }
+  };
+
+  const toggleAllPhaseBars = () => {
+    if (allPhaseIds.length === 0) return;
+
+    const shouldHideAllPhases = allPhaseIds.some((phaseId) => !(hiddenPhaseBars[phaseId] ?? false));
+
+    setHiddenPhaseBars((current) => {
+      const next = { ...current };
+      allPhaseIds.forEach((phaseId) => {
+        next[phaseId] = shouldHideAllPhases;
+      });
+      return next;
+    });
+  };
+
   const toggleAllPhases = () => {
     if (allPhaseIds.length === 0) return;
 
@@ -492,22 +562,50 @@ export function GanttChart({
             className="border-b border-slate-700 flex items-end justify-between gap-2 pb-2 px-3 text-[11px] font-semibold text-slate-400 uppercase tracking-[0.16em] bg-slate-900/98 w-full z-10 sticky top-0"
           >
             <div className="min-w-0 truncate">Project / Phase / Scope</div>
-            <button
-              onClick={toggleAllPhases}
-              className="p-1 rounded text-cyan-400 hover:bg-slate-700/70 hover:text-cyan-300 transition flex-shrink-0"
-              title="Expand or collapse all phases in the workspace"
-            >
-              {allPhaseIds.length > 0 && allPhaseIds.some((phaseId) => !(expandedPhases[phaseId] ?? true)) ? (
-                <ChevronRight size={14} />
-              ) : (
-                <ChevronDown size={14} />
-              )}
-            </button>
+            <div className="flex items-center gap-1.5 flex-shrink-0">
+              <button
+                onClick={toggleAllProjectBars}
+                className={clsx(
+                  'p-1 rounded transition',
+                  visibleProjectIds.some((projectId) => !(hiddenProjectBars[projectId] ?? false))
+                    ? 'text-amber-300 hover:text-amber-200 hover:bg-slate-700/70'
+                    : 'text-slate-500 hover:text-slate-300 hover:bg-slate-700/70'
+                )}
+                title="Show or hide all project summary bars. Hiding projects also hides all phase bars."
+              >
+                {visibleProjectIds.some((projectId) => !(hiddenProjectBars[projectId] ?? false)) ? <Lightbulb size={14} /> : <LightbulbOff size={14} />}
+              </button>
+              <button
+                onClick={toggleAllPhaseBars}
+                className={clsx(
+                  'p-1 rounded transition',
+                  allPhaseIds.some((phaseId) => !(hiddenPhaseBars[phaseId] ?? false))
+                    ? 'text-amber-300 hover:text-amber-200 hover:bg-slate-700/70'
+                    : 'text-slate-500 hover:text-slate-300 hover:bg-slate-700/70'
+                )}
+                title="Show or hide all phase summary bars"
+              >
+                {allPhaseIds.some((phaseId) => !(hiddenPhaseBars[phaseId] ?? false)) ? <Lightbulb size={14} /> : <LightbulbOff size={14} />}
+              </button>
+              <button
+                onClick={toggleAllPhases}
+                className="p-1 rounded text-cyan-400 hover:bg-slate-700/70 hover:text-cyan-300 transition"
+                title="Expand or collapse all phases in the workspace"
+              >
+                {allPhaseIds.length > 0 && allPhaseIds.some((phaseId) => !(expandedPhases[phaseId] ?? true)) ? (
+                  <ChevronRight size={14} />
+                ) : (
+                  <ChevronDown size={14} />
+                )}
+              </button>
+            </div>
           </div>
 
           <div>
             {chartRows.map((row) => {
               if (row.kind === 'project') {
+                const projectBarVisible = !hiddenProjectBars[row.projectId];
+
                 return (
                   <div
                     key={row.key}
@@ -525,33 +623,60 @@ export function GanttChart({
                       <div className="text-[13px] font-bold text-slate-100 truncate">{row.label}</div>
                       <div className="text-[9px] uppercase tracking-[0.18em] text-slate-500 flex-shrink-0">{row.taskCount} scopes</div>
                     </div>
-                    <button
-                      onClick={() => {
-                        if (confirm('Delete project?')) deleteProject(row.projectId);
-                      }}
-                      className="text-slate-400 hover:text-red-400 transition ml-2"
-                      title="Delete Project"
-                    >
-                      <UserMinus size={14} />
-                    </button>
+                    <div className="flex items-center gap-1 ml-2">
+                      <button
+                        onClick={() => toggleProjectBarVisibility(row.projectId)}
+                        className={clsx(
+                          'p-1 rounded transition',
+                          projectBarVisible
+                            ? 'text-amber-300 hover:text-amber-200 hover:bg-slate-700/70'
+                            : 'text-slate-500 hover:text-slate-300 hover:bg-slate-700/70'
+                        )}
+                        title={projectBarVisible ? 'Hide project summary bar' : 'Show project summary bar'}
+                      >
+                        {projectBarVisible ? <Lightbulb size={14} /> : <LightbulbOff size={14} />}
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (confirm('Delete project?')) deleteProject(row.projectId);
+                        }}
+                        className="text-slate-400 hover:text-red-400 transition p-1 rounded hover:bg-slate-700/70"
+                        title="Delete Project"
+                      >
+                        <UserMinus size={14} />
+                      </button>
+                    </div>
                   </div>
                 );
               }
 
               if (row.kind === 'phase') {
+                const phaseBarVisible = !hiddenPhaseBars[row.phaseId];
+
                 return (
-                  <button
+                  <div
                     key={row.key}
-                    onClick={() => togglePhase(row.phaseId)}
                     style={{ height: row.height }}
                     className="w-full px-3 flex items-center justify-between border-b border-slate-700/40 bg-slate-800/60 hover:bg-slate-700/50 transition text-left"
                   >
-                    <div className="flex items-center gap-2 min-w-0">
+                    <button onClick={() => togglePhase(row.phaseId)} className="flex items-center gap-2 min-w-0 flex-1 text-left">
                       {row.expanded ? <ChevronDown size={14} className="text-cyan-400 flex-shrink-0" /> : <ChevronRight size={14} className="text-cyan-400 flex-shrink-0" />}
                       <div className="text-[11px] font-semibold text-slate-200 truncate">{row.label}</div>
                       <div className="text-[9px] uppercase tracking-[0.18em] text-slate-500 flex-shrink-0">{row.taskCount} scopes</div>
-                    </div>
-                  </button>
+                    </button>
+                    <button
+                      onClick={() => togglePhaseBarVisibility(row.phaseId)}
+                      className={clsx(
+                        'p-1 rounded transition ml-2 flex-shrink-0',
+                        phaseBarVisible
+                          ? 'text-amber-300 hover:text-amber-200 hover:bg-slate-700/70'
+                          : 'text-slate-500 hover:text-slate-300 hover:bg-slate-700/70'
+                      )}
+                      title={phaseBarVisible ? 'Hide phase summary bar' : 'Show phase summary bar'}
+                    >
+                      {phaseBarVisible ? <Lightbulb size={14} /> : <LightbulbOff size={14} />}
+                    </button>
+                  </div>
                 );
               }
 
@@ -713,41 +838,49 @@ export function GanttChart({
                   const daySpan = Math.max(endDay - startDay + 1, 1);
 
                   if (row.kind === 'project') {
+                    const projectBarVisible = !hiddenProjectBars[row.projectId];
+
                     return (
                       <div key={row.key} style={{ height: row.height }} className="border-b border-slate-700/30 relative flex items-center bg-slate-800/10">
-                        <div
-                          className="absolute h-5 rounded-md border border-cyan-300/30 bg-gradient-to-r from-cyan-600/90 to-blue-600/90 shadow-[0_6px_18px_rgba(8,145,178,0.25)]"
-                          style={{
-                            left: `${startDay * dayWidth + 4}px`,
-                            width: `${Math.max(daySpan * dayWidth - 8, 10)}px`
-                          }}
-                        >
-                          {daySpan * dayWidth > 90 && (
-                            <span className="h-full px-3 flex items-center text-[10px] font-bold text-white tracking-wide">
-                              {row.label}
-                            </span>
-                          )}
-                        </div>
+                        {projectBarVisible && (
+                          <div
+                            className="absolute h-5 rounded-md border border-cyan-300/30 bg-gradient-to-r from-cyan-600/90 to-blue-600/90 shadow-[0_6px_18px_rgba(8,145,178,0.25)]"
+                            style={{
+                              left: `${startDay * dayWidth + 4}px`,
+                              width: `${Math.max(daySpan * dayWidth - 8, 10)}px`
+                            }}
+                          >
+                            {daySpan * dayWidth > 90 && (
+                              <span className="h-full px-3 flex items-center text-[10px] font-bold text-white tracking-wide">
+                                {row.label}
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </div>
                     );
                   }
 
                   if (row.kind === 'phase') {
+                    const phaseBarVisible = !hiddenPhaseBars[row.phaseId];
+
                     return (
                       <div key={row.key} style={{ height: row.height }} className="border-b border-slate-700/20 relative flex items-center bg-slate-800/5">
-                        <div
-                          className="absolute h-3.5 rounded border border-amber-300/30 bg-gradient-to-r from-amber-500/70 to-orange-500/70 shadow-[0_4px_12px_rgba(245,158,11,0.2)]"
-                          style={{
-                            left: `${startDay * dayWidth + 6}px`,
-                            width: `${Math.max(daySpan * dayWidth - 12, 8)}px`
-                          }}
-                        >
-                          {daySpan * dayWidth > 120 && (
-                            <span className="h-full px-2 flex items-center text-[9px] font-semibold text-white/90 uppercase tracking-[0.15em]">
-                              {row.label}
-                            </span>
-                          )}
-                        </div>
+                        {phaseBarVisible && (
+                          <div
+                            className="absolute h-3.5 rounded border border-amber-300/30 bg-gradient-to-r from-amber-500/70 to-orange-500/70 shadow-[0_4px_12px_rgba(245,158,11,0.2)]"
+                            style={{
+                              left: `${startDay * dayWidth + 6}px`,
+                              width: `${Math.max(daySpan * dayWidth - 12, 8)}px`
+                            }}
+                          >
+                            {daySpan * dayWidth > 120 && (
+                              <span className="h-full px-2 flex items-center text-[9px] font-semibold text-white/90 uppercase tracking-[0.15em]">
+                                {row.label}
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </div>
                     );
                   }

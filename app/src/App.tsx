@@ -28,7 +28,7 @@ function App() {
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [isTemplateStudioOpen, setIsTemplateStudioOpen] = useState(false);
 
-  const activeFilterCount = activeFilters.vendors.length + activeFilters.scopes.length;
+  const activeFilterCount = activeFilters.projects.length + activeFilters.vendors.length + activeFilters.scopes.length;
 
   useEffect(() => {
     fetchData();

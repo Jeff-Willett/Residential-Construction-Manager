@@ -49,6 +49,7 @@ export interface TaskTemplateInput {
 }
 
 export interface ActiveFilters {
+  projects: string[];
   vendors: string[];
   scopes: string[];
 }
@@ -137,7 +138,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       isLoading: true,
       error: null,
       vendorColors: {},
-      activeFilters: { vendors: [], scopes: [] },
+      activeFilters: { projects: [], vendors: [], scopes: [] },
       undoStack: [],
       redoStack: [],
 
@@ -149,7 +150,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         });
       },
 
-      clearFilters: () => set({ activeFilters: { vendors: [], scopes: [] } }),
+      clearFilters: () => set({ activeFilters: { projects: [], vendors: [], scopes: [] } }),
 
       setVendorColor: async (vendor: string, color: string) => {
         // Optimistic UI update
