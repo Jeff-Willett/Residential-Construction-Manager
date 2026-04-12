@@ -48,6 +48,22 @@ export interface TaskTemplateInput {
   bottleneck_vendor: string | null;
 }
 
+export interface ProjectTaskDraftInput {
+  template_id: string | null;
+  phase_template_id: string | null;
+  task_order: number;
+  scope: string;
+  subcontractor: string | null;
+  duration: number;
+  bottleneck_vendor: string | null;
+}
+
+export interface ProjectCreationInput {
+  name: string;
+  startDate: string;
+  tasks: ProjectTaskDraftInput[];
+}
+
 export interface ActiveFilters {
   projects: string[];
   vendors: string[];
@@ -108,6 +124,7 @@ interface ProjectState {
   
   fetchData: () => Promise<void>;
   addProject: (name: string, startDate: string) => Promise<void>;
+  addProjectFromDraft: (input: ProjectCreationInput) => Promise<void>;
   createPhaseTemplate: (input: PhaseTemplateInput) => Promise<void>;
   updatePhaseTemplate: (phaseId: string, updates: Partial<PhaseTemplateInput>) => Promise<void>;
   deletePhaseTemplate: (phaseId: string) => Promise<void>;
@@ -265,65 +282,108 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   addProject: async (name: string, startDate: string) => {
-    const { phaseTemplates, templates, templateDependencies } = get();
+    const { templates, addProjectFromDraft } = get();
+
+    await addProjectFromDraft({
+      name,
+      startDate,
+      tasks: templates.map((template) => ({
+        template_id: template.id,
+        phase_template_id: template.phase_template_id,
+        task_order: template.task_order,
+        scope: template.scope,
+        subcontractor: template.subcontractor,
+        duration: template.default_days,
+        bottleneck_vendor: template.bottleneck_vendor
+      }))
+    });
+  },
+
+  addProjectFromDraft: async ({ name, startDate, tasks }) => {
+    const { phaseTemplates, templateDependencies } = get();
+    const trimmedName = name.trim();
+    if (!trimmedName) throw new Error('Project name is required.');
+    if (!startDate) throw new Error('Project start date is required.');
+
+    const sanitizedTasks = tasks
+      .map((task) => ({
+        template_id: task.template_id,
+        phase_template_id: task.phase_template_id,
+        task_order: Math.max(1, Math.trunc(task.task_order || 1)),
+        scope: task.scope.trim(),
+        subcontractor: task.subcontractor?.trim() || null,
+        duration: Math.max(1, Math.trunc(task.duration || 1)),
+        bottleneck_vendor: task.bottleneck_vendor?.trim() || null
+      }))
+      .filter((task) => task.scope.length > 0);
+
+    if (sanitizedTasks.length === 0) throw new Error('Add at least one scope before creating a project.');
+
     // 1. Insert Project
     const { data: projData, error: projErr } = await supabase
       .from('projects')
-      .insert({ name, start_date: startDate })
+      .insert({ name: trimmedName, start_date: startDate })
       .select()
       .single();
 
     if (projErr || !projData) {
-      console.error('Failed to create project:', projErr);
-      return;
+      throw projErr ?? new Error('Failed to create project.');
     }
 
     const projectId = projData.id;
 
-    if (phaseTemplates.length === 0 || templates.length === 0) {
+    if (sanitizedTasks.length === 0) {
       await get().fetchData();
       return;
     }
 
     // 2. Insert Project Phases from Templates
-    const phaseInserts = phaseTemplates.map((phase) => ({
-      project_id: projectId,
-      phase_template_id: phase.id,
-      name: phase.name,
-      phase_order: phase.phase_order
-    }));
+    const usedPhaseIds = new Set(sanitizedTasks.map((task) => task.phase_template_id).filter(Boolean));
+    const phaseInserts = phaseTemplates
+      .filter((phase) => usedPhaseIds.has(phase.id))
+      .map((phase) => ({
+        project_id: projectId,
+        phase_template_id: phase.id,
+        name: phase.name,
+        phase_order: phase.phase_order
+      }));
 
-    const { data: insertedPhases, error: phasesErr } = await supabase
-      .from('project_phases')
-      .insert(phaseInserts)
-      .select();
+    let insertedPhases: ProjectPhaseRow[] = [];
+    if (phaseInserts.length > 0) {
+      const { data, error: phasesErr } = await supabase.from('project_phases').insert(phaseInserts).select();
 
-    if (phasesErr || !insertedPhases) {
-      console.error('Failed to insert project phases:', phasesErr);
-      return;
+      if (phasesErr || !data) {
+        throw phasesErr ?? new Error('Failed to insert project phases.');
+      }
+
+      insertedPhases = data as ProjectPhaseRow[];
     }
 
     const phaseTemplateToProjectPhaseMap = new Map<string, string>();
-    (insertedPhases as ProjectPhaseRow[]).forEach((phase) => {
+    insertedPhases.forEach((phase) => {
       if (phase.phase_template_id) {
         phaseTemplateToProjectPhaseMap.set(phase.phase_template_id, phase.id);
       }
     });
 
     // 3. Insert Tasks from Templates
-    const taskInserts = templates.map(t => ({
-      project_id: projectId,
-      project_phase_id: t.phase_template_id ? phaseTemplateToProjectPhaseMap.get(t.phase_template_id) ?? null : null,
-      template_id: t.id,
-      name: t.scope,
-      phase_name: t.phase_name,
-      phase_order: t.phase_order,
-      task_order: t.task_order,
-      subcontractor: t.subcontractor,
-      bottleneck_vendor: t.bottleneck_vendor,
-      duration: t.default_days,
-      lag: 0
-    }));
+    const phaseById = new Map(phaseTemplates.map((phase) => [phase.id, phase]));
+    const taskInserts = sanitizedTasks.map((task) => {
+      const phase = task.phase_template_id ? phaseById.get(task.phase_template_id) ?? null : null;
+      return {
+        project_id: projectId,
+        project_phase_id: task.phase_template_id ? phaseTemplateToProjectPhaseMap.get(task.phase_template_id) ?? null : null,
+        template_id: task.template_id,
+        name: task.scope,
+        phase_name: phase?.name ?? null,
+        phase_order: phase?.phase_order ?? 0,
+        task_order: task.task_order,
+        subcontractor: task.subcontractor,
+        bottleneck_vendor: task.bottleneck_vendor,
+        duration: task.duration,
+        lag: 0
+      };
+    });
 
     const { data: insertedTasks, error: tasksErr } = await supabase
       .from('tasks')
@@ -331,23 +391,29 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       .select();
 
     if (tasksErr || !insertedTasks) {
-      console.error('Failed to insert tasks:', tasksErr);
-      return;
+      throw tasksErr ?? new Error('Failed to insert tasks.');
     }
 
     // 4. Insert Dependencies
-    // We must map template_id -> new task id
+    // Preserve only dependency chains for template-backed scopes that were kept in the draft.
     const templateToTaskMap = new Map<string, string>();
-    insertedTasks.forEach(t => templateToTaskMap.set(t.template_id, t.id));
+    insertedTasks.forEach((task) => {
+      if (task.template_id) templateToTaskMap.set(task.template_id, task.id);
+    });
 
-    const depInserts = templateDependencies.map(td => ({
-      predecessor_id: templateToTaskMap.get(td.predecessor_id)!,
-      successor_id: templateToTaskMap.get(td.successor_id)!
-    })).filter(d => d.predecessor_id && d.successor_id); // Ensure validity
+    const depInserts = templateDependencies
+      .map((dependency) => ({
+        predecessor_id: templateToTaskMap.get(dependency.predecessor_id) ?? null,
+        successor_id: templateToTaskMap.get(dependency.successor_id) ?? null
+      }))
+      .filter(
+        (dependency): dependency is { predecessor_id: string; successor_id: string } =>
+          Boolean(dependency.predecessor_id && dependency.successor_id)
+      );
 
     if (depInserts.length > 0) {
       const { error: depErr } = await supabase.from('dependencies').insert(depInserts);
-      if (depErr) console.error('Failed to insert dependencies:', depErr);
+      if (depErr) throw depErr;
     }
 
     // Refresh everything to reflect changes
@@ -656,11 +722,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   deleteProject: async (projectId: string) => {
     const { error } = await supabase.from('projects').delete().eq('id', projectId);
-    if (!error) {
-      await get().fetchData();
-    } else {
+    if (error) {
       console.error('Failed to delete project', error);
+      throw error;
     }
+
+    await get().fetchData();
   },
 
   updateTaskDuration: async (taskId: string, duration: number) => {

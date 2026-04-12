@@ -5,6 +5,7 @@ import { SidePanel } from './components/SidePanel';
 import { VendorColorModal } from './components/VendorColorModal';
 import { FilterModal } from './components/FilterModal';
 import { TemplateStudioModal } from './components/TemplateStudioModal';
+import { AddProjectModal } from './components/AddProjectModal';
 import { Settings, Filter, RotateCcw, RotateCw, FileText } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 
@@ -27,6 +28,7 @@ function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [isTemplateStudioOpen, setIsTemplateStudioOpen] = useState(false);
+  const [isAddProjectOpen, setIsAddProjectOpen] = useState(false);
 
   const activeFilterCount = activeFilters.projects.length + activeFilters.vendors.length + activeFilters.scopes.length;
 
@@ -97,14 +99,7 @@ function App() {
               </button>
              <button 
                disabled={isLoading || !!error}
-               onClick={() => {
-                 const name = prompt("Enter Project Name (e.g. IW12):");
-                 if (!name) return;
-                 const start = prompt("Enter Start Date (YYYY-MM-DD):", new Date().toISOString().split('T')[0]);
-                 if (name && start) {
-                    useProjectStore.getState().addProject(name, start);
-                 }
-               }}
+               onClick={() => setIsAddProjectOpen(true)}
                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:text-slate-500 disabled:shadow-none rounded-md font-medium text-sm transition-colors shadow-lg shadow-blue-500/20"
              >
                + Add Project
@@ -163,6 +158,10 @@ function App() {
       {/* Template Studio */}
       {isTemplateStudioOpen && (
         <TemplateStudioModal onClose={() => setIsTemplateStudioOpen(false)} />
+      )}
+
+      {isAddProjectOpen && (
+        <AddProjectModal onClose={() => setIsAddProjectOpen(false)} />
       )}
     </div>
   );
