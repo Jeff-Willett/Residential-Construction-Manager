@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { differenceInDays, addDays, endOfWeek, format, isWeekend, startOfWeek, parseISO } from 'date-fns';
 import { clsx } from 'clsx';
-import { ZoomIn, ZoomOut, AlertTriangle, UserMinus, ChevronDown, ChevronRight } from 'lucide-react';
+import { ZoomIn, ZoomOut, AlertTriangle, UserMinus, ChevronDown, ChevronRight, X } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { useProjectStore } from '../store/projectStore';
 import type { EngineTask } from '../utils/schedulingEngine';
@@ -95,6 +95,10 @@ export function GanttChart({
   const [zoomLevel, setZoomLevel] = useState<ZoomLevel>('day');
   const [leftPanelWidth, setLeftPanelWidth] = useState(272);
   const [expandedPhases, setExpandedPhases] = useState<Record<string, boolean>>({});
+  const [projectPendingDelete, setProjectPendingDelete] = useState<{ id: string; name: string } | null>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState('');
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [isDeletingProject, setIsDeletingProject] = useState(false);
 
   const isResizing = useRef(false);
   const mainScrollRef = useRef<HTMLDivElement>(null);
@@ -336,6 +340,40 @@ export function GanttChart({
     document.addEventListener('mouseup', handleMouseUp, { once: true });
   };
 
+  const beginDeleteProject = (projectId: string, projectName: string) => {
+    setProjectPendingDelete({ id: projectId, name: projectName });
+    setDeleteConfirmation('');
+    setDeleteError(null);
+  };
+
+  const closeDeleteProjectModal = () => {
+    if (isDeletingProject) return;
+    setProjectPendingDelete(null);
+    setDeleteConfirmation('');
+    setDeleteError(null);
+  };
+
+  const confirmDeleteProject = async () => {
+    if (!projectPendingDelete) return;
+    if (deleteConfirmation !== projectPendingDelete.name) {
+      setDeleteError('Type the exact project name to enable deletion.');
+      return;
+    }
+
+    setIsDeletingProject(true);
+    setDeleteError(null);
+
+    try {
+      await deleteProject(projectPendingDelete.id);
+      setProjectPendingDelete(null);
+      setDeleteConfirmation('');
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : 'Failed to delete project.');
+    } finally {
+      setIsDeletingProject(false);
+    }
+  };
+
   useEffect(() => {
     const mainScroll = mainScrollRef.current;
     const topScroll = topScrollRef.current;
@@ -526,9 +564,7 @@ export function GanttChart({
                       <div className="text-[9px] uppercase tracking-[0.18em] text-slate-500 flex-shrink-0">{row.taskCount} scopes</div>
                     </div>
                     <button
-                      onClick={() => {
-                        if (confirm('Delete project?')) deleteProject(row.projectId);
-                      }}
+                      onClick={() => beginDeleteProject(row.projectId, row.label)}
                       className="text-slate-400 hover:text-red-400 transition ml-2"
                       title="Delete Project"
                     >
@@ -804,6 +840,70 @@ export function GanttChart({
           </div>
         </div>
       </div>
+
+      {projectPendingDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="w-full max-w-lg overflow-hidden rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-800 bg-slate-950/80 px-5 py-4">
+              <div>
+                <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-red-400">Delete Project</div>
+                <h3 className="mt-2 text-lg font-semibold text-slate-100">{projectPendingDelete.name}</h3>
+                <p className="mt-2 text-sm text-slate-400">
+                  This removes the project and its schedule data. Type the project name exactly to confirm.
+                </p>
+              </div>
+              <button
+                onClick={closeDeleteProjectModal}
+                disabled={isDeletingProject}
+                className="rounded-full p-2 text-slate-400 transition hover:bg-slate-800 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                title="Close"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="px-5 py-5">
+              <label className="block">
+                <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  Type Project Name
+                </div>
+                <input
+                  value={deleteConfirmation}
+                  onChange={(event) => {
+                    setDeleteConfirmation(event.target.value);
+                    if (deleteError) setDeleteError(null);
+                  }}
+                  placeholder={projectPendingDelete.name}
+                  className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 focus:border-red-400 focus:outline-none"
+                />
+              </label>
+
+              <div className="mt-3 text-sm text-slate-500">
+                Required: <span className="font-medium text-slate-300">{projectPendingDelete.name}</span>
+              </div>
+
+              {deleteError && <div className="mt-3 text-sm text-red-300">{deleteError}</div>}
+            </div>
+
+            <div className="flex items-center justify-end gap-3 border-t border-slate-800 bg-slate-950/60 px-5 py-4">
+              <button
+                onClick={closeDeleteProjectModal}
+                disabled={isDeletingProject}
+                className="rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-300 transition hover:bg-slate-800 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDeleteProject}
+                disabled={isDeletingProject || deleteConfirmation !== projectPendingDelete.name}
+                className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm font-medium text-red-200 transition hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {isDeletingProject ? 'Deleting...' : 'Delete Project'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
