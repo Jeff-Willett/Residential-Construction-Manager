@@ -256,6 +256,15 @@ export function GanttChart({
   const { chartRows, phaseIdsByProject, projectHasCollapsedPhase } = chartMeta;
   const allPhaseIds = useMemo(() => Array.from(phaseIdsByProject.values()).flat(), [phaseIdsByProject]);
   const visibleProjectIds = useMemo(() => Array.from(phaseIdsByProject.keys()), [phaseIdsByProject]);
+  const taskRowById = useMemo(
+    () =>
+      new Map(
+        chartRows
+          .filter((row): row is Extract<ChartRow, { kind: 'task' }> => row.kind === 'task')
+          .map((row) => [row.taskId, row])
+      ),
+    [chartRows]
+  );
 
   const datesInfo = useMemo(() => {
     if (visibleTasks.length === 0 || projects.length === 0) {
@@ -538,6 +547,34 @@ export function GanttChart({
     setZoomLevel(ZOOM_LEVELS[Math.max(0, Math.min(ZOOM_LEVELS.length - 1, nextIndex))]);
   };
 
+  const centerTaskBarInView = useCallback(
+    (taskId: string) => {
+      const mainScroll = mainScrollRef.current;
+      const taskRow = taskRowById.get(taskId);
+      if (!mainScroll || !taskRow) return;
+
+      const startDay = getDayOffset(taskRow.start);
+      const finishDay = getDayOffset(taskRow.finish);
+      const daySpan = Math.max(finishDay - startDay + 1, 1);
+      const barCenter = startDay * dayWidth + Math.max(daySpan * dayWidth - 10, 8) / 2;
+      const gridViewportWidth = Math.max(mainScroll.clientWidth - leftPanelWidth, 0);
+      const maxScrollLeft = Math.max(totalGridWidth - gridViewportWidth, 0);
+      const targetScrollLeft = Math.max(0, Math.min(barCenter - gridViewportWidth / 2, maxScrollLeft));
+
+      mainScroll.scrollTo({ left: targetScrollLeft, behavior: 'smooth' });
+      topScrollRef.current?.scrollTo({ left: targetScrollLeft, behavior: 'smooth' });
+    },
+    [dayWidth, getDayOffset, leftPanelWidth, taskRowById, totalGridWidth]
+  );
+
+  const handlePaneTaskClick = useCallback(
+    (taskId: string) => {
+      onTaskClick(taskId);
+      centerTaskBarInView(taskId);
+    },
+    [centerTaskBarInView, onTaskClick]
+  );
+
   const handleZoomIn = () => {
     captureZoomFocus();
     const currentIndex = ZOOM_LEVELS.indexOf(zoomLevel);
@@ -719,7 +756,7 @@ export function GanttChart({
               return (
                 <div
                   key={row.key}
-                  onClick={() => onTaskClick(row.taskId)}
+                  onClick={() => handlePaneTaskClick(row.taskId)}
                   style={{ height: row.height }}
                   className={clsx(
                     'px-3 flex items-center justify-between border-b border-slate-700/30 cursor-pointer hover:bg-slate-700/40 transition relative',
