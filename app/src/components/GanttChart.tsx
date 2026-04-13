@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { differenceInDays, addDays, endOfWeek, format, isWeekend, startOfWeek, parseISO } from 'date-fns';
 import { clsx } from 'clsx';
-import { ZoomIn, ZoomOut, AlertTriangle, UserMinus, ChevronDown, ChevronRight, Lightbulb, LightbulbOff, X } from 'lucide-react';
+import { ZoomIn, ZoomOut, AlertTriangle, ChevronDown, ChevronRight, Lightbulb, LightbulbOff, Pencil } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { useProjectStore } from '../store/projectStore';
 import type { EngineTask } from '../utils/schedulingEngine';
@@ -76,17 +76,18 @@ const TASK_ROW_HEIGHT = 28;
 
 export function GanttChart({
   onTaskClick,
+  onEditProject,
   selectedTaskId
 }: {
   onTaskClick: (id: string) => void;
+  onEditProject: (projectId: string) => void;
   selectedTaskId: string | null;
 }) {
-  const { projects, tasks, projectPhases, deleteProject, vendorColors, activeFilters } = useProjectStore(
+  const { projects, tasks, projectPhases, vendorColors, activeFilters } = useProjectStore(
     useShallow((state) => ({
       projects: state.projects,
       tasks: state.tasks,
       projectPhases: state.projectPhases,
-      deleteProject: state.deleteProject,
       vendorColors: state.vendorColors,
       activeFilters: state.activeFilters
     }))
@@ -97,10 +98,6 @@ export function GanttChart({
   const [expandedPhases, setExpandedPhases] = useState<Record<string, boolean>>({});
   const [hiddenProjectBars, setHiddenProjectBars] = useState<Record<string, boolean>>({});
   const [hiddenPhaseBars, setHiddenPhaseBars] = useState<Record<string, boolean>>({});
-  const [projectPendingDelete, setProjectPendingDelete] = useState<{ id: string; name: string } | null>(null);
-  const [deleteConfirmation, setDeleteConfirmation] = useState('');
-  const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [isDeletingProject, setIsDeletingProject] = useState(false);
 
   const isResizing = useRef(false);
   const mainScrollRef = useRef<HTMLDivElement>(null);
@@ -256,6 +253,15 @@ export function GanttChart({
   const { chartRows, phaseIdsByProject, projectHasCollapsedPhase } = chartMeta;
   const allPhaseIds = useMemo(() => Array.from(phaseIdsByProject.values()).flat(), [phaseIdsByProject]);
   const visibleProjectIds = useMemo(() => Array.from(phaseIdsByProject.keys()), [phaseIdsByProject]);
+  const taskRowById = useMemo(
+    () =>
+      new Map(
+        chartRows
+          .filter((row): row is Extract<ChartRow, { kind: 'task' }> => row.kind === 'task')
+          .map((row) => [row.taskId, row])
+      ),
+    [chartRows]
+  );
 
   const datesInfo = useMemo(() => {
     if (visibleTasks.length === 0 || projects.length === 0) {
@@ -342,40 +348,6 @@ export function GanttChart({
     isResizing.current = true;
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp, { once: true });
-  };
-
-  const beginDeleteProject = (projectId: string, projectName: string) => {
-    setProjectPendingDelete({ id: projectId, name: projectName });
-    setDeleteConfirmation('');
-    setDeleteError(null);
-  };
-
-  const closeDeleteProjectModal = () => {
-    if (isDeletingProject) return;
-    setProjectPendingDelete(null);
-    setDeleteConfirmation('');
-    setDeleteError(null);
-  };
-
-  const confirmDeleteProject = async () => {
-    if (!projectPendingDelete) return;
-    if (deleteConfirmation !== projectPendingDelete.name) {
-      setDeleteError('Type the exact project name to enable deletion.');
-      return;
-    }
-
-    setIsDeletingProject(true);
-    setDeleteError(null);
-
-    try {
-      await deleteProject(projectPendingDelete.id);
-      setProjectPendingDelete(null);
-      setDeleteConfirmation('');
-    } catch (error) {
-      setDeleteError(error instanceof Error ? error.message : 'Failed to delete project.');
-    } finally {
-      setIsDeletingProject(false);
-    }
   };
 
   useEffect(() => {
@@ -538,6 +510,34 @@ export function GanttChart({
     setZoomLevel(ZOOM_LEVELS[Math.max(0, Math.min(ZOOM_LEVELS.length - 1, nextIndex))]);
   };
 
+  const centerTaskBarInView = useCallback(
+    (taskId: string) => {
+      const mainScroll = mainScrollRef.current;
+      const taskRow = taskRowById.get(taskId);
+      if (!mainScroll || !taskRow) return;
+
+      const startDay = getDayOffset(taskRow.start);
+      const finishDay = getDayOffset(taskRow.finish);
+      const daySpan = Math.max(finishDay - startDay + 1, 1);
+      const barCenter = startDay * dayWidth + Math.max(daySpan * dayWidth - 10, 8) / 2;
+      const gridViewportWidth = Math.max(mainScroll.clientWidth - leftPanelWidth, 0);
+      const maxScrollLeft = Math.max(totalGridWidth - gridViewportWidth, 0);
+      const targetScrollLeft = Math.max(0, Math.min(barCenter - gridViewportWidth / 2, maxScrollLeft));
+
+      mainScroll.scrollTo({ left: targetScrollLeft, behavior: 'smooth' });
+      topScrollRef.current?.scrollTo({ left: targetScrollLeft, behavior: 'smooth' });
+    },
+    [dayWidth, getDayOffset, leftPanelWidth, taskRowById, totalGridWidth]
+  );
+
+  const handlePaneTaskClick = useCallback(
+    (taskId: string) => {
+      onTaskClick(taskId);
+      centerTaskBarInView(taskId);
+    },
+    [centerTaskBarInView, onTaskClick]
+  );
+
   const handleZoomIn = () => {
     captureZoomFocus();
     const currentIndex = ZOOM_LEVELS.indexOf(zoomLevel);
@@ -675,11 +675,11 @@ export function GanttChart({
                         {projectBarVisible ? <Lightbulb size={14} /> : <LightbulbOff size={14} />}
                       </button>
                       <button
-                        onClick={() => beginDeleteProject(row.projectId, row.label)}
-                        className="text-slate-400 hover:text-red-400 transition p-1 rounded hover:bg-slate-700/70"
-                        title="Delete Project"
+                        onClick={() => onEditProject(row.projectId)}
+                        className="text-slate-400 hover:text-cyan-300 transition p-1 rounded hover:bg-slate-700/70"
+                        title={`Edit ${row.label}`}
                       >
-                        <UserMinus size={14} />
+                        <Pencil size={14} />
                       </button>
                     </div>
                   </div>
@@ -719,7 +719,7 @@ export function GanttChart({
               return (
                 <div
                   key={row.key}
-                  onClick={() => onTaskClick(row.taskId)}
+                  onClick={() => handlePaneTaskClick(row.taskId)}
                   style={{ height: row.height }}
                   className={clsx(
                     'px-3 flex items-center justify-between border-b border-slate-700/30 cursor-pointer hover:bg-slate-700/40 transition relative',
@@ -974,69 +974,6 @@ export function GanttChart({
         </div>
       </div>
 
-      {projectPendingDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="w-full max-w-lg overflow-hidden rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl">
-            <div className="flex items-start justify-between gap-4 border-b border-slate-800 bg-slate-950/80 px-5 py-4">
-              <div>
-                <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-red-400">Delete Project</div>
-                <h3 className="mt-2 text-lg font-semibold text-slate-100">{projectPendingDelete.name}</h3>
-                <p className="mt-2 text-sm text-slate-400">
-                  This removes the project and its schedule data. Type the project name exactly to confirm.
-                </p>
-              </div>
-              <button
-                onClick={closeDeleteProjectModal}
-                disabled={isDeletingProject}
-                className="rounded-full p-2 text-slate-400 transition hover:bg-slate-800 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
-                title="Close"
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            <div className="px-5 py-5">
-              <label className="block">
-                <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                  Type Project Name
-                </div>
-                <input
-                  value={deleteConfirmation}
-                  onChange={(event) => {
-                    setDeleteConfirmation(event.target.value);
-                    if (deleteError) setDeleteError(null);
-                  }}
-                  placeholder={projectPendingDelete.name}
-                  className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 focus:border-red-400 focus:outline-none"
-                />
-              </label>
-
-              <div className="mt-3 text-sm text-slate-500">
-                Required: <span className="font-medium text-slate-300">{projectPendingDelete.name}</span>
-              </div>
-
-              {deleteError && <div className="mt-3 text-sm text-red-300">{deleteError}</div>}
-            </div>
-
-            <div className="flex items-center justify-end gap-3 border-t border-slate-800 bg-slate-950/60 px-5 py-4">
-              <button
-                onClick={closeDeleteProjectModal}
-                disabled={isDeletingProject}
-                className="rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-300 transition hover:bg-slate-800 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={confirmDeleteProject}
-                disabled={isDeletingProject || deleteConfirmation !== projectPendingDelete.name}
-                className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm font-medium text-red-200 transition hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                {isDeletingProject ? 'Deleting...' : 'Delete Project'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
