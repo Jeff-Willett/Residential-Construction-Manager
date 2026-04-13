@@ -29,6 +29,7 @@ function App() {
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [isTemplateStudioOpen, setIsTemplateStudioOpen] = useState(false);
   const [isAddProjectOpen, setIsAddProjectOpen] = useState(false);
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
 
   const activeFilterCount = activeFilters.projects.length + activeFilters.vendors.length + activeFilters.scopes.length;
 
@@ -130,7 +131,11 @@ function App() {
                 <span className="mb-4">No projects exist. Run the generated seed script in Supabase!</span>
               </div>
             ) : (
-              <GanttChart onTaskClick={(id) => setSelectedTaskId(id)} selectedTaskId={selectedTaskId} />
+              <GanttChart
+                onTaskClick={(id) => setSelectedTaskId(id)}
+                onEditProject={(projectId) => setEditingProjectId(projectId)}
+                selectedTaskId={selectedTaskId}
+              />
             )}
           </div>
         </main>
@@ -162,6 +167,14 @@ function App() {
 
       {isAddProjectOpen && (
         <AddProjectModal onClose={() => setIsAddProjectOpen(false)} />
+      )}
+
+      {editingProjectId && (
+        <AddProjectModal
+          mode="edit"
+          projectId={editingProjectId}
+          onClose={() => setEditingProjectId(null)}
+        />
       )}
     </div>
   );
