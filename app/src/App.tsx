@@ -1,13 +1,23 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useProjectStore } from './store/projectStore';
-import { GanttChart } from './components/GanttChart';
+import { GanttChart, type GanttChartHandle } from './components/GanttChart';
 import { SidePanel } from './components/SidePanel';
 import { VendorColorModal } from './components/VendorColorModal';
 import { FilterModal } from './components/FilterModal';
 import { TemplateStudioModal } from './components/TemplateStudioModal';
 import { AddProjectModal } from './components/AddProjectModal';
-import { Settings, Filter, RotateCcw, RotateCw, FileText } from 'lucide-react';
+import { Settings, Filter, RotateCcw, RotateCw, FileText, ZoomIn, ZoomOut } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
+
+const APP_VERSION = __APP_VERSION__;
+const APP_BRANCH = __GIT_BRANCH__;
+const APP_COMMIT = __GIT_COMMIT__;
+
+const getEnvironmentLabel = () => {
+  if (import.meta.env.DEV) return 'local testing';
+  if (APP_BRANCH === 'main') return 'production';
+  return 'preview testing';
+};
 
 function App() {
   const { projects, tasks, isLoading, error, fetchData, activeFilters, undo, undoStack, redo, redoStack } = useProjectStore(
@@ -30,6 +40,9 @@ function App() {
   const [isTemplateStudioOpen, setIsTemplateStudioOpen] = useState(false);
   const [isAddProjectOpen, setIsAddProjectOpen] = useState(false);
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [zoomControls, setZoomControls] = useState({ canZoomIn: false, canZoomOut: true });
+  const ganttChartRef = useRef<GanttChartHandle>(null);
+  const environmentLabel = getEnvironmentLabel();
 
   const activeFilterCount = activeFilters.projects.length + activeFilters.vendors.length + activeFilters.scopes.length;
 
@@ -43,15 +56,33 @@ function App() {
     <div className="flex h-screen bg-slate-900 text-slate-50 font-sans">
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        <header className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm sticky top-0 z-10">
+        <header className="flex items-center justify-between px-6 py-3 border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm sticky top-0 z-10">
           <div>
             <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-cyan-300">
               Residential Construction
             </h1>
-            <p className="text-sm text-slate-400 flex items-center">
+            <p className="text-sm text-slate-400 flex items-center flex-wrap gap-2">
               Residential Construction Manager
-              <span className="ml-2 px-1.5 py-0.5 bg-slate-800 text-slate-500 text-[10px] rounded border border-slate-700 font-mono">
-                v0.0.9
+              <span className="px-1.5 py-0.5 bg-slate-800 text-cyan-300 text-[10px] rounded border border-cyan-500/30 font-mono">
+                v{APP_VERSION}
+              </span>
+              <span
+                className="px-1.5 py-0.5 bg-slate-800 text-[10px] rounded border font-mono uppercase tracking-[0.14em] border-slate-700 text-slate-300"
+                title="Current environment"
+              >
+                {environmentLabel}
+              </span>
+              <span
+                className="px-1.5 py-0.5 bg-slate-800 text-[10px] rounded border border-slate-700 text-slate-400 font-mono"
+                title="Current branch"
+              >
+                branch {APP_BRANCH}
+              </span>
+              <span
+                className="px-1.5 py-0.5 bg-slate-800 text-[10px] rounded border border-slate-700 text-slate-500 font-mono"
+                title="Current source commit"
+              >
+                source {APP_COMMIT}
               </span>
             </p>
           </div>
@@ -98,6 +129,22 @@ function App() {
               >
                 <RotateCw size={20} />
               </button>
+              <button
+                disabled={!zoomControls.canZoomOut || isLoading || !!error}
+                onClick={() => ganttChartRef.current?.zoomOut()}
+                className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed rounded-md border border-slate-700 shadow-sm transition-colors text-slate-300 hover:text-white"
+                title="Zoom Out"
+              >
+                <ZoomOut size={20} />
+              </button>
+              <button
+                disabled={!zoomControls.canZoomIn || isLoading || !!error}
+                onClick={() => ganttChartRef.current?.zoomIn()}
+                className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed rounded-md border border-slate-700 shadow-sm transition-colors text-slate-300 hover:text-white"
+                title="Zoom In"
+              >
+                <ZoomIn size={20} />
+              </button>
              <button 
                disabled={isLoading || !!error}
                onClick={() => setIsAddProjectOpen(true)}
@@ -108,7 +155,7 @@ function App() {
           </div>
         </header>
         
-        <main className="flex-1 overflow-hidden p-6 flex flex-col">
+        <main className="flex-1 overflow-hidden px-4 pt-2 pb-4 flex flex-col">
           <div className="flex-1 flex flex-col bg-slate-800/40 rounded-xl border border-slate-700/50 overflow-hidden shadow-2xl backdrop-blur-md">
             {isLoading ? (
               <div className="flex items-center justify-center p-12 text-slate-400">
@@ -132,9 +179,11 @@ function App() {
               </div>
             ) : (
               <GanttChart
+                ref={ganttChartRef}
                 onTaskClick={(id) => setSelectedTaskId(id)}
                 onEditProject={(projectId) => setEditingProjectId(projectId)}
                 selectedTaskId={selectedTaskId}
+                onZoomStateChange={setZoomControls}
               />
             )}
           </div>

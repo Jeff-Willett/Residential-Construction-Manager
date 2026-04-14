@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { differenceInDays, addDays, endOfWeek, format, isWeekend, startOfWeek, parseISO } from 'date-fns';
 import { clsx } from 'clsx';
-import { ZoomIn, ZoomOut, AlertTriangle, ChevronDown, ChevronRight, Lightbulb, LightbulbOff, Pencil } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ChevronRight, Lightbulb, LightbulbOff, Pencil } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { useProjectStore } from '../store/projectStore';
 import type { EngineTask } from '../utils/schedulingEngine';
@@ -91,16 +91,45 @@ type PhaseRowMetric = {
 const PROJECT_ROW_HEIGHT = 34;
 const PHASE_ROW_HEIGHT = 28;
 const TASK_ROW_HEIGHT = 28;
+const HIDDEN_PROJECT_BARS_STORAGE_KEY = 'gantt:hidden-project-bars';
+const HIDDEN_PHASE_BARS_STORAGE_KEY = 'gantt:hidden-phase-bars';
 
-export function GanttChart({
-  onTaskClick,
-  onEditProject,
-  selectedTaskId
-}: {
+const readPersistedBarVisibility = (storageKey: string) => {
+  if (typeof window === 'undefined') return {};
+
+  try {
+    const rawValue = window.localStorage.getItem(storageKey);
+    if (!rawValue) return {};
+
+    const parsed = JSON.parse(rawValue);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, boolean] => typeof entry[0] === 'string' && typeof entry[1] === 'boolean')
+    );
+  } catch {
+    return {};
+  }
+};
+
+export type GanttChartHandle = {
+  zoomIn: () => void;
+  zoomOut: () => void;
+  canZoomIn: boolean;
+  canZoomOut: boolean;
+};
+
+export const GanttChart = forwardRef<GanttChartHandle, {
   onTaskClick: (id: string) => void;
   onEditProject: (projectId: string) => void;
   selectedTaskId: string | null;
-}) {
+  onZoomStateChange?: (state: { canZoomIn: boolean; canZoomOut: boolean }) => void;
+}> (function GanttChart({
+  onTaskClick,
+  onEditProject,
+  selectedTaskId,
+  onZoomStateChange
+}, ref) {
   const { projects, tasks, projectPhases, vendorColors, activeFilters } = useProjectStore(
     useShallow((state) => ({
       projects: state.projects,
@@ -114,8 +143,12 @@ export function GanttChart({
   const [zoomLevel, setZoomLevel] = useState<ZoomLevel>('day');
   const [leftPanelWidth, setLeftPanelWidth] = useState(272);
   const [expandedPhases, setExpandedPhases] = useState<Record<string, boolean>>({});
-  const [hiddenProjectBars, setHiddenProjectBars] = useState<Record<string, boolean>>({});
-  const [hiddenPhaseBars, setHiddenPhaseBars] = useState<Record<string, boolean>>({});
+  const [hiddenProjectBars, setHiddenProjectBars] = useState<Record<string, boolean>>(() =>
+    readPersistedBarVisibility(HIDDEN_PROJECT_BARS_STORAGE_KEY)
+  );
+  const [hiddenPhaseBars, setHiddenPhaseBars] = useState<Record<string, boolean>>(() =>
+    readPersistedBarVisibility(HIDDEN_PHASE_BARS_STORAGE_KEY)
+  );
   const [scrollTop, setScrollTop] = useState(0);
 
   const isResizing = useRef(false);
@@ -272,6 +305,17 @@ export function GanttChart({
   const { chartRows, phaseIdsByProject, projectHasCollapsedPhase } = chartMeta;
   const allPhaseIds = useMemo(() => Array.from(phaseIdsByProject.values()).flat(), [phaseIdsByProject]);
   const visibleProjectIds = useMemo(() => Array.from(phaseIdsByProject.keys()), [phaseIdsByProject]);
+  const allProjectIds = useMemo(() => projects.map((project) => project.id), [projects]);
+  const allPersistablePhaseIds = useMemo(() => {
+    const persistedIds = new Set(projectPhases.map((phase) => phase.id));
+
+    tasks.forEach((task) => {
+      const fallbackPhaseId = task.project_phase_id ?? `${task.project_id}:${task.phase_order}:${task.phase_name ?? 'Unphased'}`;
+      persistedIds.add(fallbackPhaseId);
+    });
+
+    return Array.from(persistedIds);
+  }, [projectPhases, tasks]);
   const rowMetrics = useMemo<RowMetric[]>(() => {
     let offsetTop = 0;
 
@@ -497,6 +541,32 @@ export function GanttChart({
     pendingZoomFocusDay.current = null;
   }, [dayWidth]);
 
+  useEffect(() => {
+    const validProjectIds = new Set(allProjectIds);
+
+    setHiddenProjectBars((current) => {
+      const next = Object.fromEntries(Object.entries(current).filter(([projectId]) => validProjectIds.has(projectId)));
+      return Object.keys(next).length === Object.keys(current).length ? current : next;
+    });
+  }, [allProjectIds]);
+
+  useEffect(() => {
+    const validPhaseIds = new Set(allPersistablePhaseIds);
+
+    setHiddenPhaseBars((current) => {
+      const next = Object.fromEntries(Object.entries(current).filter(([phaseId]) => validPhaseIds.has(phaseId)));
+      return Object.keys(next).length === Object.keys(current).length ? current : next;
+    });
+  }, [allPersistablePhaseIds]);
+
+  useEffect(() => {
+    window.localStorage.setItem(HIDDEN_PROJECT_BARS_STORAGE_KEY, JSON.stringify(hiddenProjectBars));
+  }, [hiddenProjectBars]);
+
+  useEffect(() => {
+    window.localStorage.setItem(HIDDEN_PHASE_BARS_STORAGE_KEY, JSON.stringify(hiddenPhaseBars));
+  }, [hiddenPhaseBars]);
+
   const captureZoomFocus = () => {
     const mainScroll = mainScrollRef.current;
     if (!mainScroll) return;
@@ -648,30 +718,26 @@ export function GanttChart({
     setZoomFromIndex(currentIndex + 1);
   };
 
+  useImperativeHandle(
+    ref,
+    () => ({
+      zoomIn: handleZoomIn,
+      zoomOut: handleZoomOut,
+      canZoomIn: zoomLevel !== 'day',
+      canZoomOut: zoomLevel !== 'month'
+    }),
+    [zoomLevel]
+  );
+
+  useEffect(() => {
+    onZoomStateChange?.({
+      canZoomIn: zoomLevel !== 'day',
+      canZoomOut: zoomLevel !== 'month'
+    });
+  }, [onZoomStateChange, zoomLevel]);
+
   return (
     <div className="flex flex-col h-full relative">
-      <div className="flex justify-between items-center px-4 py-2 bg-slate-800/80 border-b border-slate-700">
-        <h2 className="text-sm font-semibold text-slate-300 uppercase tracking-wider">Project / Phase / Scope Timeline</h2>
-        <div className="flex items-center space-x-2">
-          <button
-            onClick={handleZoomOut}
-            disabled={zoomLevel === 'month'}
-            className="p-1 rounded bg-slate-700 hover:bg-slate-600 disabled:opacity-40 disabled:cursor-not-allowed text-slate-300 transition"
-            title="Zoom Out"
-          >
-            <ZoomOut size={16} />
-          </button>
-          <button
-            onClick={handleZoomIn}
-            disabled={zoomLevel === 'day'}
-            className="p-1 rounded bg-slate-700 hover:bg-slate-600 disabled:opacity-40 disabled:cursor-not-allowed text-slate-300 transition"
-            title="Zoom In"
-          >
-            <ZoomIn size={16} />
-          </button>
-        </div>
-      </div>
-
       {chartRows.length > 0 && (
         <div
           ref={topScrollRef}
@@ -1112,4 +1178,4 @@ export function GanttChart({
 
     </div>
   );
-}
+});
