@@ -2,6 +2,21 @@
 
 This document outlines the operational setup, deployment workflow, and troubleshooting steps for the **Residential Construction Manager**.
 
+## Environment Split
+
+The repository now targets two Supabase environments:
+
+- `production`: used by `main` and Vercel Production
+- `branch-super-base`: used by local development, feature branches, and Vercel Preview
+
+This split keeps testing resets away from production and makes branch work safer.
+
+Reference docs:
+
+- [TESTING_DATA.md](/Volumes/Ext-APFSv350/GoogleDrive/PARA/01_Projects/Residential%20Construction%20Gantt%20Manager/TESTING_DATA.md:1)
+- [BRANCH_SUPER_BASE_SETUP.md](/Volumes/Ext-APFSv350/GoogleDrive/PARA/01_Projects/Residential%20Construction%20Gantt%20Manager/BRANCH_SUPER_BASE_SETUP.md:1)
+- [ENVIRONMENT_POLICY.md](/Volumes/Ext-APFSv350/GoogleDrive/PARA/01_Projects/Residential%20Construction%20Gantt%20Manager/ENVIRONMENT_POLICY.md:1)
+
 ## 🏗️ Architecture & Tech Stack
 
 - **Codebase/Framework**: React + TypeScript built with Vite.
@@ -20,6 +35,11 @@ The application is configured for continuous deployment (CD) through Vercel.
    - **Framework Preset**: Vite
    - **Build Command**: `npm run build` (Automatically detected by Vercel)
    - **Output Directory**: `dist` (Automatically detected by Vercel)
+3. **Supabase Environment Mapping**:
+   - **Production deployment** uses the production Supabase URL/key pair.
+   - **Preview deployments** use the branch-super-base Supabase URL/key pair.
+   - Do not point preview deployments at production.
+   - Standing repo rule: `main` means production; every non-`main` branch means branch-super-base.
 
 ## 🛠️ Local Development Setup
 
@@ -38,6 +58,32 @@ If you need to reproduce or test something locally before it goes to Vercel:
    npm run dev
    ```
    This will spin up a local server (usually at `http://localhost:5173`) where you can test your changes.
+4. Use the branch-super-base credentials in `app/.env.local` for normal development. Production credentials should stay out of the app runtime unless we are intentionally validating production.
+
+## Testing Data Operations
+
+Testing-data commands now live at the repository root:
+
+```bash
+npm run testing:status
+npm run testing:snapshot -- --label "baseline-super-base"
+npm run testing:refresh
+```
+
+Important safety rule:
+
+- `testing:refresh` is for `branch-super-base` by default
+- production refreshes require an explicit override flag and should be treated as recovery events
+
+## Backup Readiness
+
+Production backups are a separate operational track from the environment split, but this environment split supports that future work.
+
+Current expectation:
+
+- branch/testing resets happen in `branch-super-base`
+- production snapshot and restore actions stay explicit and guarded
+- when we implement scheduled backups, they should target the production project only
 
 ## 🚑 Troubleshooting
 
