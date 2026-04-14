@@ -72,6 +72,8 @@ export interface EngineTask {
   bottleneck_vendor: string | null;
   duration: number; // working days
   lag: number; 
+  manual_start?: string | null;
+  manual_finish?: string | null;
   
   // Calculated fields
   logic_start?: string; // When dependencies are met
@@ -113,6 +115,8 @@ export function calculateScheduleEngine(
       bottleneck_vendor: task.bottleneck_vendor,
       duration: task.duration,
       lag: task.lag,
+      manual_start: task.manual_start ?? null,
+      manual_finish: task.manual_finish ?? null,
     })
   );
   

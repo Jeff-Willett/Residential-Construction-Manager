@@ -32,3 +32,5 @@ This project is edited in both **Windsurf** and **Anti-gravity** IDEs.
 
 ---
 *Capture new items from testers below:*
+
+- [WS][Completed] Restored editable task start/finish date fields in `AddProjectModal.tsx`, re-enabled saved `manual_start` / `manual_finish` support in `projectStore.ts`, and tuned row date column widths so full dates fit without crowding row action icons.

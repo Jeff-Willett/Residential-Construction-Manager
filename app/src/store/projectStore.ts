@@ -58,6 +58,8 @@ export interface ProjectTaskDraftInput {
   duration: number;
   bottleneck_vendor: string | null;
   lag?: number;
+  manual_start?: string | null;
+  manual_finish?: string | null;
 }
 
 export interface ProjectCreationInput {
@@ -100,6 +102,8 @@ interface TaskRow {
   bottleneck_vendor: string | null;
   duration: number | null;
   lag: number | null;
+  manual_start: string | null;
+  manual_finish: string | null;
 }
 
 interface DependencyRow {
@@ -329,6 +333,8 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         bottleneck_vendor: t.bottleneck_vendor,
         duration: t.duration || 1,
         lag: t.lag || 0,
+        manual_start: t.manual_start,
+        manual_finish: t.manual_finish,
       }));
 
       const fetchedDeps: EngineDependency[] = ((depsData as DependencyRow[] | null) || []).map((d) => ({
@@ -382,7 +388,9 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         scope: template.scope,
         subcontractor: template.subcontractor,
         duration: template.default_days,
-        bottleneck_vendor: template.bottleneck_vendor
+        bottleneck_vendor: template.bottleneck_vendor,
+        manual_start: null,
+        manual_finish: null
       }))
     });
   },
@@ -402,7 +410,9 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         subcontractor: task.subcontractor?.trim() || null,
         duration: Math.max(1, Math.trunc(task.duration || 1)),
         bottleneck_vendor: task.bottleneck_vendor?.trim() || null,
-        lag: Math.trunc(task.lag || 0)
+        lag: Math.trunc(task.lag || 0),
+        manual_start: task.manual_start || null,
+        manual_finish: task.manual_finish || null
       }))
       .filter((task) => task.scope.length > 0);
 
@@ -470,7 +480,9 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         subcontractor: task.subcontractor,
         bottleneck_vendor: task.bottleneck_vendor,
         duration: task.duration,
-        lag: task.lag ?? 0
+        lag: task.lag ?? 0,
+        manual_start: task.manual_start,
+        manual_finish: task.manual_finish
       };
     });
 
@@ -529,7 +541,9 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         subcontractor: task.subcontractor?.trim() || null,
         duration: Math.max(1, Math.trunc(task.duration || 1)),
         bottleneck_vendor: task.bottleneck_vendor?.trim() || null,
-        lag: Math.trunc(task.lag || 0)
+        lag: Math.trunc(task.lag || 0),
+        manual_start: task.manual_start || null,
+        manual_finish: task.manual_finish || null
       }))
       .filter((task) => task.scope.length > 0);
 
@@ -615,7 +629,9 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         subcontractor: task.subcontractor,
         bottleneck_vendor: task.bottleneck_vendor,
         duration: task.duration,
-        lag: task.lag ?? 0
+        lag: task.lag ?? 0,
+        manual_start: task.manual_start,
+        manual_finish: task.manual_finish
       };
     });
 
