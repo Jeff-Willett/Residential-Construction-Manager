@@ -70,6 +70,24 @@ type ChartRow =
       height: number;
     };
 
+type RowMetric = {
+  row: ChartRow;
+  top: number;
+  bottom: number;
+};
+
+type ProjectRowMetric = {
+  row: Extract<ChartRow, { kind: 'project' }>;
+  top: number;
+  bottom: number;
+};
+
+type PhaseRowMetric = {
+  row: Extract<ChartRow, { kind: 'phase' }>;
+  top: number;
+  bottom: number;
+};
+
 const PROJECT_ROW_HEIGHT = 34;
 const PHASE_ROW_HEIGHT = 28;
 const TASK_ROW_HEIGHT = 28;
@@ -98,6 +116,7 @@ export function GanttChart({
   const [expandedPhases, setExpandedPhases] = useState<Record<string, boolean>>({});
   const [hiddenProjectBars, setHiddenProjectBars] = useState<Record<string, boolean>>({});
   const [hiddenPhaseBars, setHiddenPhaseBars] = useState<Record<string, boolean>>({});
+  const [scrollTop, setScrollTop] = useState(0);
 
   const isResizing = useRef(false);
   const mainScrollRef = useRef<HTMLDivElement>(null);
@@ -253,6 +272,19 @@ export function GanttChart({
   const { chartRows, phaseIdsByProject, projectHasCollapsedPhase } = chartMeta;
   const allPhaseIds = useMemo(() => Array.from(phaseIdsByProject.values()).flat(), [phaseIdsByProject]);
   const visibleProjectIds = useMemo(() => Array.from(phaseIdsByProject.keys()), [phaseIdsByProject]);
+  const rowMetrics = useMemo<RowMetric[]>(() => {
+    let offsetTop = 0;
+
+    return chartRows.map((row) => {
+      const metric: RowMetric = {
+        row,
+        top: offsetTop,
+        bottom: offsetTop + row.height
+      };
+      offsetTop += row.height;
+      return metric;
+    });
+  }, [chartRows]);
   const taskRowById = useMemo(
     () =>
       new Map(
@@ -334,6 +366,70 @@ export function GanttChart({
     return 32;
   }, [zoomLevel]);
 
+  const activeStickyRows = useMemo(() => {
+    let activeProject: ProjectRowMetric | null = null;
+    let nextProject: ProjectRowMetric | null = null;
+    let activePhase: PhaseRowMetric | null = null;
+    let nextPhase: PhaseRowMetric | null = null;
+
+    // Use absolute scrollTop for detection thresholds
+    // A project sticks when it hits the top (0)
+    // A phase sticks when it hits the bottom of the project header (PROJECT_ROW_HEIGHT)
+    for (let i = 0; i < rowMetrics.length; i++) {
+      const metric = rowMetrics[i];
+      
+      if (metric.row.kind === 'project') {
+        if (metric.top <= scrollTop) {
+          activeProject = metric as ProjectRowMetric;
+          activePhase = null; 
+        } else if (!nextProject) {
+          nextProject = metric as ProjectRowMetric;
+        }
+      }
+
+      if (metric.row.kind === 'phase' && activeProject && metric.row.projectId === activeProject.row.projectId) {
+        if (metric.top <= scrollTop + PROJECT_ROW_HEIGHT) {
+          activePhase = metric as PhaseRowMetric;
+        } else if (!nextPhase) {
+          nextPhase = metric as PhaseRowMetric;
+        }
+      }
+    }
+
+    // Calculate Push Offsets
+    let projectOffset = 0;
+    if (activeProject && nextProject) {
+      const distance = nextProject.top - scrollTop;
+      if (distance < PROJECT_ROW_HEIGHT) {
+        projectOffset = distance - PROJECT_ROW_HEIGHT;
+      }
+    }
+
+    let phaseOffset = projectOffset; 
+    if (activePhase) {
+      const phaseStickyThreshold = scrollTop + PROJECT_ROW_HEIGHT;
+      
+      if (nextPhase) {
+        const distance = nextPhase.top - phaseStickyThreshold;
+        if (distance < PHASE_ROW_HEIGHT) {
+          phaseOffset += (distance - PHASE_ROW_HEIGHT);
+        }
+      } 
+      else if (nextProject) {
+        const distance = nextProject.top - phaseStickyThreshold;
+        if (distance < PHASE_ROW_HEIGHT) {
+          phaseOffset += (distance - PHASE_ROW_HEIGHT);
+        }
+      }
+    }
+
+    return { activeProject, activePhase, projectOffset, phaseOffset };
+  }, [scrollTop, rowMetrics]);
+
+  const { activeProject, activePhase, projectOffset, phaseOffset } = activeStickyRows;
+  const activeProjectMetric = activeProject;
+  const activePhaseMetric = activePhase;
+
   const handleMouseMove = useCallback((event: MouseEvent) => {
     if (!isResizing.current) return;
     setLeftPanelWidth(Math.max(200, Math.min(520, event.clientX)));
@@ -359,6 +455,7 @@ export function GanttChart({
       if (!isScrollingMain.current) {
         isScrollingTop.current = true;
         topScroll.scrollLeft = mainScroll.scrollLeft;
+        setScrollTop(mainScroll.scrollTop);
         setTimeout(() => {
           isScrollingTop.current = false;
         }, 50);
@@ -377,6 +474,7 @@ export function GanttChart({
 
     mainScroll.addEventListener('scroll', syncTop);
     topScroll.addEventListener('scroll', syncMain);
+    setScrollTop(mainScroll.scrollTop);
 
     return () => {
       mainScroll.removeEventListener('scroll', syncTop);
@@ -587,7 +685,7 @@ export function GanttChart({
       <div ref={mainScrollRef} className="flex flex-1 overflow-auto relative rounded-b-xl hide-scrollbar">
         <div
           style={{ width: leftPanelWidth }}
-          className="flex-shrink-0 border-r border-slate-700 bg-slate-800/95 z-40 sticky left-0"
+          className="flex-shrink-0 border-r border-slate-700 bg-slate-800/95 z-40 sticky left-0 min-h-max"
         >
           <div
             onMouseDown={handleMouseDown}
@@ -639,117 +737,131 @@ export function GanttChart({
             </div>
           </div>
 
-          <div>
-            {chartRows.map((row) => {
-              if (row.kind === 'project') {
-                const projectBarVisible = !hiddenProjectBars[row.projectId];
+          {rowMetrics.map((metric) => {
+            const row = metric.row;
+            const isProjectSticky = activeProjectMetric?.row.key === row.key;
+            const isPhaseSticky = activePhaseMetric?.row.key === row.key;
 
-                return (
-                  <div
-                    key={row.key}
-                    style={{ height: row.height }}
-                    className="px-3 flex items-center justify-between border-b border-slate-700/50 bg-slate-800"
-                  >
-                    <div className="min-w-0 flex items-center gap-2">
-                      <button
-                        onClick={() => toggleProjectPhases(row.projectId)}
-                        className="p-1 rounded text-cyan-400 hover:bg-slate-700/70 hover:text-cyan-300 transition flex-shrink-0"
-                        title="Expand or collapse all phases in this project"
-                      >
-                        {projectHasCollapsedPhase.get(row.projectId) ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
-                      </button>
-                      <div className="text-[13px] font-bold text-slate-100 truncate">{row.label}</div>
-                      <div className="text-[9px] uppercase tracking-[0.18em] text-slate-500 flex-shrink-0">{row.taskCount} scopes</div>
-                    </div>
-                    <div className="flex items-center gap-1 ml-2">
-                      <button
-                        onClick={() => toggleProjectBarVisibility(row.projectId)}
-                        className={clsx(
-                          'p-1 rounded transition',
-                          projectBarVisible
-                            ? 'text-amber-300 hover:text-amber-200 hover:bg-slate-700/70'
-                            : 'text-slate-500 hover:text-slate-300 hover:bg-slate-700/70'
-                        )}
-                        title={projectBarVisible ? 'Hide project summary bar' : 'Show project summary bar'}
-                      >
-                        {projectBarVisible ? <Lightbulb size={14} /> : <LightbulbOff size={14} />}
-                      </button>
-                      <button
-                        onClick={() => onEditProject(row.projectId)}
-                        className="text-slate-400 hover:text-cyan-300 transition p-1 rounded hover:bg-slate-700/70"
-                        title={`Edit ${row.label}`}
-                      >
-                        <Pencil size={14} />
-                      </button>
-                    </div>
-                  </div>
-                );
-              }
-
-              if (row.kind === 'phase') {
-                const phaseBarVisible = !hiddenPhaseBars[row.phaseId];
-
-                return (
-                  <div
-                    key={row.key}
-                    style={{ height: row.height }}
-                    className="w-full px-3 flex items-center justify-between border-b border-slate-700/40 bg-slate-800/60 hover:bg-slate-700/50 transition text-left"
-                  >
-                    <button onClick={() => togglePhase(row.phaseId)} className="flex items-center gap-2 min-w-0 flex-1 text-left">
-                      {row.expanded ? <ChevronDown size={14} className="text-cyan-400 flex-shrink-0" /> : <ChevronRight size={14} className="text-cyan-400 flex-shrink-0" />}
-                      <div className="text-[11px] font-semibold text-slate-200 truncate">{row.label}</div>
-                      <div className="text-[9px] uppercase tracking-[0.18em] text-slate-500 flex-shrink-0">{row.taskCount} scopes</div>
-                    </button>
-                    <button
-                      onClick={() => togglePhaseBarVisibility(row.phaseId)}
-                      className={clsx(
-                        'p-1 rounded transition ml-2 flex-shrink-0',
-                        phaseBarVisible
-                          ? 'text-amber-300 hover:text-amber-200 hover:bg-slate-700/70'
-                          : 'text-slate-500 hover:text-slate-300 hover:bg-slate-700/70'
-                      )}
-                      title={phaseBarVisible ? 'Hide phase summary bar' : 'Show phase summary bar'}
-                    >
-                      {phaseBarVisible ? <Lightbulb size={14} /> : <LightbulbOff size={14} />}
-                    </button>
-                  </div>
-                );
-              }
+            if (row.kind === 'project') {
+              const projectBarVisible = !hiddenProjectBars[row.projectId];
 
               return (
                 <div
                   key={row.key}
-                  onClick={() => handlePaneTaskClick(row.taskId)}
-                  style={{ height: row.height }}
+                  style={{ 
+                    height: row.height,
+                    top: isProjectSticky ? headerHeight + projectOffset : undefined
+                  }}
                   className={clsx(
-                    'px-3 flex items-center justify-between border-b border-slate-700/30 cursor-pointer hover:bg-slate-700/40 transition relative',
-                    selectedTaskId === row.taskId && 'bg-slate-700/60'
+                    'px-3 flex items-center justify-between border-b border-slate-700/50 bg-slate-800 transition-colors',
+                    isProjectSticky ? 'sticky z-30 shadow-[0_6px_18px_rgba(2,6,23,0.35)]' : 'z-10'
                   )}
                 >
-                  {selectedTaskId === row.taskId && <div className="absolute left-0 top-0 bottom-0 w-1 bg-cyan-400 rounded-r shadow-[0_0_8px_rgba(34,211,238,0.8)]" />}
-                  <div className="flex items-center gap-1.5 min-w-0 pl-5">
-                    <span className="text-[11px] font-medium text-slate-200 truncate">{row.label}</span>
-                    <span className="text-[9px] text-slate-500 flex-shrink-0">({row.duration}d)</span>
-                    {row.subcontractor && (
-                      <span
-                        className={clsx(
-                          'text-[9px] uppercase truncate font-bold',
-                          row.delayDays > 0 ? 'text-red-400' : row.lag > 0 ? 'text-orange-400' : 'text-green-400/80'
-                        )}
-                      >
-                        [{row.subcontractor}]
-                      </span>
-                    )}
+                  <div className="min-w-0 flex items-center gap-2">
+                    <button
+                      onClick={() => toggleProjectPhases(row.projectId)}
+                      className="p-1 rounded text-cyan-400 hover:bg-slate-700/70 hover:text-cyan-300 transition flex-shrink-0"
+                      title="Expand or collapse all phases in this project"
+                    >
+                      {projectHasCollapsedPhase.get(row.projectId) ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+                    </button>
+                    <div className="text-[13px] font-bold text-slate-100 truncate">{row.label}</div>
+                    <div className="text-[9px] uppercase tracking-[0.18em] text-slate-500 flex-shrink-0">{row.taskCount} scopes</div>
                   </div>
-                  {row.delayDays > 0 && (
-                    <span title={`Delay: ${row.delayDays} days`} className="flex-shrink-0 drop-shadow ml-1">
-                      <AlertTriangle size={12} className="text-red-500" />
+                  <div className="flex items-center gap-1 ml-2">
+                    <button
+                      onClick={() => toggleProjectBarVisibility(row.projectId)}
+                      className={clsx(
+                        'p-1 rounded transition',
+                        projectBarVisible
+                          ? 'text-amber-300 hover:text-amber-200 hover:bg-slate-700/70'
+                          : 'text-slate-500 hover:text-slate-300 hover:bg-slate-700/70'
+                      )}
+                      title={projectBarVisible ? 'Hide project summary bar' : 'Show project summary bar'}
+                    >
+                      {projectBarVisible ? <Lightbulb size={14} /> : <LightbulbOff size={14} />}
+                    </button>
+                    <button
+                      onClick={() => onEditProject(row.projectId)}
+                      className="text-slate-400 hover:text-cyan-300 transition p-1 rounded hover:bg-slate-700/70"
+                      title={`Edit ${row.label}`}
+                    >
+                      <Pencil size={14} />
+                    </button>
+                  </div>
+                </div>
+              );
+            }
+
+            if (row.kind === 'phase') {
+              const phaseBarVisible = !hiddenPhaseBars[row.phaseId];
+
+              return (
+                <div
+                  key={row.key}
+                  style={{ 
+                    height: row.height,
+                    top: isPhaseSticky ? headerHeight + PROJECT_ROW_HEIGHT + phaseOffset : undefined
+                  }}
+                  className={clsx(
+                    'w-full px-3 flex items-center justify-between border-b border-slate-700/40 bg-slate-800/90 hover:bg-slate-700/50 transition text-left',
+                    isPhaseSticky ? 'sticky z-20 shadow-[0_4px_14px_rgba(2,6,23,0.28)]' : 'z-10'
+                  )}
+                >
+                  <button onClick={() => togglePhase(row.phaseId)} className="flex items-center gap-2 min-w-0 flex-1 text-left">
+                    {row.expanded ? <ChevronDown size={14} className="text-cyan-400 flex-shrink-0" /> : <ChevronRight size={14} className="text-cyan-400 flex-shrink-0" />}
+                    <div className="text-[11px] font-semibold text-slate-200 truncate">{row.label}</div>
+                    <div className="text-[9px] uppercase tracking-[0.18em] text-slate-500 flex-shrink-0">{row.taskCount} scopes</div>
+                  </button>
+                  <button
+                    onClick={() => togglePhaseBarVisibility(row.phaseId)}
+                    className={clsx(
+                      'p-1 rounded transition ml-2 flex-shrink-0',
+                      phaseBarVisible
+                        ? 'text-amber-300 hover:text-amber-200 hover:bg-slate-700/70'
+                        : 'text-slate-500 hover:text-slate-300 hover:bg-slate-700/70'
+                    )}
+                    title={phaseBarVisible ? 'Hide phase summary bar' : 'Show phase summary bar'}
+                  >
+                    {phaseBarVisible ? <Lightbulb size={14} /> : <LightbulbOff size={14} />}
+                  </button>
+                </div>
+              );
+            }
+
+            return (
+              <div
+                key={row.key}
+                onClick={() => handlePaneTaskClick(row.taskId)}
+                style={{ height: row.height }}
+                className={clsx(
+                  'px-3 flex items-center justify-between border-b border-slate-700/30 cursor-pointer hover:bg-slate-700/40 transition relative',
+                  selectedTaskId === row.taskId && 'bg-slate-700/60'
+                )}
+              >
+                {selectedTaskId === row.taskId && <div className="absolute left-0 top-0 bottom-0 w-1 bg-cyan-400 rounded-r shadow-[0_0_8px_rgba(34,211,238,0.8)]" />}
+                <div className="flex items-center gap-1.5 min-w-0 pl-5">
+                  <span className="text-[11px] font-medium text-slate-200 truncate">{row.label}</span>
+                  <span className="text-[9px] text-slate-500 flex-shrink-0">({row.duration}d)</span>
+                  {row.subcontractor && (
+                    <span
+                      className={clsx(
+                        'text-[9px] uppercase truncate font-bold',
+                        row.delayDays > 0 ? 'text-red-400' : row.lag > 0 ? 'text-orange-400' : 'text-green-400/80'
+                      )}
+                    >
+                      [{row.subcontractor}]
                     </span>
                   )}
                 </div>
-              );
-            })}
-          </div>
+                {row.delayDays > 0 && (
+                  <span title={`Delay: ${row.delayDays} days`} className="flex-shrink-0 drop-shadow ml-1">
+                    <AlertTriangle size={12} className="text-red-500" />
+                  </span>
+                )}
+              </div>
+            );
+          })}
         </div>
 
         <div className="flex-1 relative pb-6">
@@ -872,15 +984,28 @@ export function GanttChart({
                   const startDay = getDayOffset(row.start);
                   const endDay = getDayOffset(row.finish);
                   const daySpan = Math.max(endDay - startDay + 1, 1);
+                  const isProjectSticky = activeProjectMetric?.row.key === row.key;
+                  const isPhaseSticky = activePhaseMetric?.row.key === row.key;
 
                   if (row.kind === 'project') {
                     const projectBarVisible = !hiddenProjectBars[row.projectId];
 
                     return (
-                      <div key={row.key} style={{ height: row.height }} className="border-b border-slate-700/30 relative flex items-center bg-slate-800/10">
+                      <div 
+                        key={row.key} 
+                        style={{ 
+                          height: row.height,
+                          top: isProjectSticky ? headerHeight + projectOffset : undefined
+                        }} 
+                        className={clsx(
+                          'border-b border-slate-700/30 relative flex items-center overflow-hidden',
+                          isProjectSticky ? 'sticky z-30 bg-slate-900 shadow-[0_6px_18px_rgba(2,6,23,0.35)]' : 'z-10 bg-slate-800/10'
+                        )}
+                      >
+                        {isProjectSticky && <div className="absolute inset-0 bg-slate-900 z-0" />}
                         {projectBarVisible && (
                           <div
-                            className="absolute h-5 rounded-md border border-cyan-300/30 bg-gradient-to-r from-cyan-600/90 to-blue-600/90 shadow-[0_6px_18px_rgba(8,145,178,0.25)]"
+                            className="absolute h-5 rounded-md border border-cyan-300/30 bg-gradient-to-r from-cyan-600/90 to-blue-600/90 shadow-[0_6px_18px_rgba(8,145,178,0.25)] z-10"
                             style={{
                               left: `${startDay * dayWidth + 4}px`,
                               width: `${Math.max(daySpan * dayWidth - 8, 10)}px`
@@ -901,10 +1026,21 @@ export function GanttChart({
                     const phaseBarVisible = !hiddenPhaseBars[row.phaseId];
 
                     return (
-                      <div key={row.key} style={{ height: row.height }} className="border-b border-slate-700/20 relative flex items-center bg-slate-800/5">
+                      <div 
+                        key={row.key} 
+                        style={{ 
+                          height: row.height,
+                          top: isPhaseSticky ? headerHeight + PROJECT_ROW_HEIGHT + phaseOffset : undefined
+                        }} 
+                        className={clsx(
+                          'border-b border-slate-700/20 relative flex items-center overflow-hidden',
+                          isPhaseSticky ? 'sticky z-20 bg-slate-900 shadow-[0_4px_12px_rgba(2,6,23,0.25)]' : 'z-10 bg-slate-800/5'
+                        )}
+                      >
+                        {isPhaseSticky && <div className="absolute inset-0 bg-slate-900 z-0" />}
                         {phaseBarVisible && (
                           <div
-                            className="absolute h-3.5 rounded border border-amber-300/30 bg-gradient-to-r from-amber-500/70 to-orange-500/70 shadow-[0_4px_12px_rgba(245,158,11,0.2)]"
+                            className="absolute h-3.5 rounded border border-amber-300/30 bg-gradient-to-r from-amber-500/70 to-orange-500/70 shadow-[0_4px_12px_rgba(245,158,11,0.2)] z-10"
                             style={{
                               left: `${startDay * dayWidth + 6}px`,
                               width: `${Math.max(daySpan * dayWidth - 12, 8)}px`

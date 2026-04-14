@@ -3,7 +3,10 @@
   "version": "0.0.9",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "testing:status": "node scripts/testing-data.mjs status",
+    "testing:refresh": "node scripts/testing-data.mjs refresh",
+    "testing:snapshot": "node scripts/testing-data.mjs snapshot"
   },
   "repository": {
     "type": "git",
