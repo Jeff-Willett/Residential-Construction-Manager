@@ -49,6 +49,10 @@ export function differenceInWorkingDays(startDateStr: string, endDateStr: string
     return count;
 }
 
+export function getFinishDateFromDuration(startDateStr: string, duration: number): string {
+  return addWorkingDays(startDateStr, Math.max(duration - 1, 0));
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -72,7 +76,7 @@ export interface EngineTask {
   // Calculated fields
   logic_start?: string; // When dependencies are met
   calculated_start?: string; // logic_start + resource wait if any
-  calculated_finish?: string; // calculated_start + duration
+  calculated_finish?: string; // inclusive finish date for the occupied work span
   delay_days?: number; // difference in days between logic and calculated
   delay_cause_task_id?: string; // Which conflicting task is holding up this vendor
 }
@@ -154,7 +158,7 @@ export function calculateScheduleEngine(
     if (task.bottleneck_vendor) {
         const vendorState = vendorOccupancy.get(task.bottleneck_vendor);
         if (vendorState) {
-             const vendorAvailableDate = addWorkingDays(vendorState.lastBusy, 2); // 1 day after last busy
+             const vendorAvailableDate = addWorkingDays(vendorState.lastBusy, 1); // next working day after last busy
              if (parseISO(vendorAvailableDate) > parseISO(actualStart)) {
                  actualStart = vendorAvailableDate;
                  task.delay_cause_task_id = vendorState.taskId;
@@ -163,7 +167,7 @@ export function calculateScheduleEngine(
     }
     
     task.calculated_start = actualStart;
-    task.calculated_finish = addWorkingDays(actualStart, task.duration);
+    task.calculated_finish = getFinishDateFromDuration(actualStart, task.duration);
     
     if (task.bottleneck_vendor) {
         vendorOccupancy.set(task.bottleneck_vendor, { lastBusy: task.calculated_finish, taskId: task.id });
