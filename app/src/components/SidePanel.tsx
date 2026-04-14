@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useProjectStore } from '../store/projectStore';
-import type { EngineTask } from '../utils/schedulingEngine';
+import { getFinishDateFromDuration, type EngineTask } from '../utils/schedulingEngine';
 import { X, Clock, CalendarDays, AlertTriangle } from 'lucide-react';
 import { format, parseISO, isWeekend, addDays } from 'date-fns';
 
@@ -20,27 +20,6 @@ function getWorkingDaysDiff(startStr: string, endStr: string): number {
     return isForward ? count : -count;
 }
 
-function addWorkingDaysLocal(startDateStr: string, daysToAdd: number): string {
-  try {
-    if (!startDateStr || startDateStr.length < 8) return '';
-    let currentDate = parseISO(startDateStr);
-    if (isNaN(currentDate.getTime())) return '';
-    
-    if (currentDate.getFullYear() < 2000) currentDate.setFullYear(2026);
-
-    while (isWeekend(currentDate)) currentDate = addDays(currentDate, 1);
-    let daysAdded = 0;
-    while (daysAdded < daysToAdd - 1) {
-      currentDate = addDays(currentDate, 1);
-      if (!isWeekend(currentDate)) daysAdded++;
-    }
-    return format(currentDate, 'yyyy-MM-dd');
-  } catch (e) {
-    console.error('Date error:', e);
-    return '';
-  }
-}
-
 export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => void }) {
   const { updateTaskDuration, updateTaskLag, updateTaskSubcontractor, projects, tasks, dependencies } = useProjectStore();
   
@@ -56,7 +35,7 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
       const dur = parseInt(e.target.value, 10);
       setDurationInput(e.target.value);
       if (!isNaN(dur) && dur > 0 && startDateStr) {
-          setFinishDateStr(addWorkingDaysLocal(startDateStr, dur));
+          setFinishDateStr(getFinishDateFromDuration(startDateStr, dur));
       }
   };
 
@@ -65,7 +44,7 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
       if (!newStart) return;
       setStartDateStr(newStart);
       const dur = parseInt(durationInput, 10) || 1;
-      setFinishDateStr(addWorkingDaysLocal(newStart, dur));
+      setFinishDateStr(getFinishDateFromDuration(newStart, dur));
   };
 
   const handleFinishDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
