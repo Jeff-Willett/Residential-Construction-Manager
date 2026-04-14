@@ -366,8 +366,6 @@ export function GanttChart({
     return 32;
   }, [zoomLevel]);
 
-  const contentScrollTop = Math.max(0, scrollTop - headerHeight);
-
   const activeStickyRows = useMemo(() => {
     let activeProject: ProjectRowMetric | null = null;
     let nextProject: ProjectRowMetric | null = null;
@@ -431,24 +429,6 @@ export function GanttChart({
   const { activeProject, activePhase, projectOffset, phaseOffset } = activeStickyRows;
   const activeProjectMetric = activeProject;
   const activePhaseMetric = activePhase;
-  const stickyPhaseTop = PROJECT_ROW_HEIGHT + phaseOffset;
-
-  const isRowCoveredBySticky = useCallback(
-    (metric: RowMetric) => {
-      if (metric.row.kind === 'project' && activeProjectMetric?.row.key === metric.row.key) {
-        const rowViewportTop = metric.top - scrollTop;
-        return rowViewportTop < PROJECT_ROW_HEIGHT + projectOffset + 1;
-      }
-
-      if (metric.row.kind === 'phase' && activePhaseMetric?.row.key === metric.row.key) {
-        const rowViewportTop = (metric.top - scrollTop) - PROJECT_ROW_HEIGHT;
-        return rowViewportTop < phaseOffset + 1;
-      }
-
-      return false;
-    },
-    [activePhaseMetric, activeProjectMetric, scrollTop, phaseOffset, projectOffset]
-  );
 
   const handleMouseMove = useCallback((event: MouseEvent) => {
     if (!isResizing.current) return;
@@ -1018,13 +998,14 @@ export function GanttChart({
                           top: isProjectSticky ? headerHeight + projectOffset : undefined
                         }} 
                         className={clsx(
-                          'border-b border-slate-700/30 relative flex items-center bg-slate-800/10',
-                          isProjectSticky ? 'sticky z-30 shadow-[0_6px_18px_rgba(2,6,23,0.35)]' : 'z-10'
+                          'border-b border-slate-700/30 relative flex items-center overflow-hidden',
+                          isProjectSticky ? 'sticky z-30 bg-slate-900 shadow-[0_6px_18px_rgba(2,6,23,0.35)]' : 'z-10 bg-slate-800/10'
                         )}
                       >
+                        {isProjectSticky && <div className="absolute inset-0 bg-slate-900 z-0" />}
                         {projectBarVisible && (
                           <div
-                            className="absolute h-5 rounded-md border border-cyan-300/30 bg-gradient-to-r from-cyan-600/90 to-blue-600/90 shadow-[0_6px_18px_rgba(8,145,178,0.25)]"
+                            className="absolute h-5 rounded-md border border-cyan-300/30 bg-gradient-to-r from-cyan-600/90 to-blue-600/90 shadow-[0_6px_18px_rgba(8,145,178,0.25)] z-10"
                             style={{
                               left: `${startDay * dayWidth + 4}px`,
                               width: `${Math.max(daySpan * dayWidth - 8, 10)}px`
@@ -1052,13 +1033,14 @@ export function GanttChart({
                           top: isPhaseSticky ? headerHeight + PROJECT_ROW_HEIGHT + phaseOffset : undefined
                         }} 
                         className={clsx(
-                          'border-b border-slate-700/20 relative flex items-center bg-slate-800/5',
-                          isPhaseSticky ? 'sticky z-20 shadow-[0_4px_12px_rgba(2,6,23,0.25)]' : 'z-10'
+                          'border-b border-slate-700/20 relative flex items-center overflow-hidden',
+                          isPhaseSticky ? 'sticky z-20 bg-slate-900 shadow-[0_4px_12px_rgba(2,6,23,0.25)]' : 'z-10 bg-slate-800/5'
                         )}
                       >
+                        {isPhaseSticky && <div className="absolute inset-0 bg-slate-900 z-0" />}
                         {phaseBarVisible && (
                           <div
-                            className="absolute h-3.5 rounded border border-amber-300/30 bg-gradient-to-r from-amber-500/70 to-orange-500/70 shadow-[0_4px_12px_rgba(245,158,11,0.2)]"
+                            className="absolute h-3.5 rounded border border-amber-300/30 bg-gradient-to-r from-amber-500/70 to-orange-500/70 shadow-[0_4px_12px_rgba(245,158,11,0.2)] z-10"
                             style={{
                               left: `${startDay * dayWidth + 6}px`,
                               width: `${Math.max(daySpan * dayWidth - 12, 8)}px`
