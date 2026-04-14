@@ -819,7 +819,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
                     top: isProjectSticky ? headerHeight + projectOffset : undefined
                   }}
                   className={clsx(
-                    'px-3 flex items-center justify-between border-b border-slate-700/50 bg-slate-800 transition-colors',
+                    'px-3 flex items-center justify-between border-b border-slate-700/50 bg-gradient-to-r from-cyan-600/90 to-blue-600/90 transition-colors',
                     isProjectSticky ? 'sticky z-30 shadow-[0_6px_18px_rgba(2,6,23,0.35)]' : 'z-10'
                   )}
                 >
