@@ -28,6 +28,6 @@ If a request does not explicitly say `production`, do not use production.
 
 ## Why this rule exists
 
-- protects live data from normal branch/testing workflows
+- protects live data from normal branch and testing workflows
 - makes branch behavior predictable
 - keeps production actions deliberate and auditable

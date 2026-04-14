@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useProjectStore } from '../store/projectStore';
 import { getFinishDateFromDuration, type EngineTask } from '../utils/schedulingEngine';
 import { X, Clock, CalendarDays, AlertTriangle } from 'lucide-react';
@@ -21,7 +21,7 @@ function getWorkingDaysDiff(startStr: string, endStr: string): number {
 }
 
 export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => void }) {
-  const { updateTaskDuration, updateTaskLag, updateTaskSubcontractor, projects, tasks, dependencies } = useProjectStore();
+  const { updateTaskFields, updateTaskDuration, updateTaskLag, updateTaskSubcontractor, projects, tasks, dependencies } = useProjectStore();
   
   const [durationInput, setDurationInput] = useState(task.duration.toString());
   const [vendorInput, setVendorInput] = useState(task.subcontractor || '');
@@ -30,6 +30,19 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
 
   const uniqueVendors = Array.from(new Set(tasks.map(t => t.subcontractor).filter(Boolean))) as string[];
   uniqueVendors.sort();
+
+  useEffect(() => {
+    setDurationInput(task.duration.toString());
+    setVendorInput(task.subcontractor || '');
+    setStartDateStr(task.calculated_start || '');
+    setFinishDateStr(task.calculated_finish || '');
+  }, [
+    task.id,
+    task.duration,
+    task.subcontractor,
+    task.calculated_start,
+    task.calculated_finish
+  ]);
 
   const handleDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       const dur = parseInt(e.target.value, 10);
@@ -66,8 +79,9 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
   const predecessors = tasks.filter(t => predIds.includes(t.id));
   const latestPred = [...predecessors].sort((a,b) => (b.calculated_finish || '').localeCompare(a.calculated_finish || ''))[0];
   const hasLogicConflict = (task.lag || 0) < 0 && latestPred;
+  const acceptedLag = (task.lag || 0) + (task.delay_days || 0);
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const dur = parseInt(durationInput, 10);
     let finalLag = task.lag;
     if (startDateStr && startDateStr !== task.calculated_start) {
@@ -75,10 +89,13 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
         const dateDrift = getWorkingDaysDiff(baseDate, startDateStr);
         finalLag = task.lag + dateDrift;
     }
-    
-    if (!isNaN(dur) && dur > 0 && dur !== task.duration) updateTaskDuration(task.id, dur);
-    if (finalLag !== task.lag) updateTaskLag(task.id, finalLag);
-    if (vendorInput !== (task.subcontractor || '')) updateTaskSubcontractor(task.id, vendorInput || null, vendorInput || null);
+
+    await updateTaskFields(task.id, {
+      duration: !isNaN(dur) && dur > 0 ? dur : undefined,
+      lag: finalLag,
+      subcontractor: vendorInput || null,
+      bottleneck_vendor: vendorInput || null
+    });
   };
 
   return (
@@ -177,23 +194,22 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
                    <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Engine Solutions</span>
                    <button 
                      onClick={() => {
-                        setVendorInput('');
-                        updateTaskSubcontractor(task.id, null, null);
+                       updateTaskLag(task.id, acceptedLag);
                      }}
                      className="w-full text-xs font-bold py-1.5 px-3 bg-red-500/20 hover:bg-red-500/40 text-red-100 rounded transition border border-red-500/50 hover:border-red-400/80 shadow text-left flex justify-between items-center"
                    >
-                     <span>1. Release Vendor Constraint</span>
-                     <span className="text-[10px] text-red-300/80 font-normal">Reassigns task</span>
+                     <span>1. Accept Proposed Date</span>
+                     <span className="text-[10px] text-red-300/80 font-normal">Keeps vendor, locks shown date</span>
                    </button>
                    
                    <button 
                      onClick={() => {
-                       updateTaskLag(task.id, (task.lag || 0) + (task.delay_days || 0));
+                       updateTaskSubcontractor(task.id, task.subcontractor || null, null);
                      }}
                      className="w-full text-xs font-bold py-1.5 px-3 bg-red-500/20 hover:bg-red-500/40 text-red-100 rounded transition border border-red-500/50 hover:border-red-400/80 shadow text-left flex justify-between items-center"
                    >
-                     <span>2. Absorb Delay as Lag</span>
-                     <span className="text-[10px] text-red-300/80 font-normal">Locks current date</span>
+                     <span>2. Release Resource Constraint</span>
+                     <span className="text-[10px] text-red-300/80 font-normal">Keeps contractor name</span>
                    </button>
 
                    {conflictTask && (
