@@ -1,6 +1,6 @@
 # Testing Data Workflow
 
-This repository now treats testing data as a dedicated environment workflow, not just a loose snapshot file.
+This repository treats testing data as a dedicated environment workflow, not just a loose snapshot file.
 
 ## Environment names
 
@@ -14,9 +14,9 @@ Standing default:
 
 ## What "super base" means now
 
-In day-to-day repo language, "super base" should mean the `branch-super-base` environment unless we explicitly say `production`.
+In day-to-day repo language, "super base" should mean the `branch-super-base` environment unless `production` is stated explicitly.
 
-That gives us a stable testing reset target without letting routine branch work point at production.
+That gives the team a stable testing reset target without letting routine branch work point at production.
 
 ## Commands
 
@@ -61,7 +61,7 @@ PRODUCTION_SERVICE_ROLE_KEY=...
 Compatibility fallback:
 
 - `branch-super-base` also falls back to the current repo values of `VITE_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`
-- this keeps the existing workflow working while we complete the environment split
+- this preserves the existing workflow while the environment split is being formalized
 
 ## Snapshot behavior
 
@@ -72,6 +72,6 @@ Compatibility fallback:
 
 ## Guardrails
 
-- Preview and branch workflows should use `branch-super-base`, not `production`
+- preview and branch workflows should use `branch-super-base`, not `production`
 - `testing:refresh` refuses to touch `production` unless `--allow-production-refresh` is supplied
 - production backups should be treated as operational events, not normal branch resets

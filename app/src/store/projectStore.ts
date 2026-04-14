@@ -140,6 +140,15 @@ interface ProjectState {
   deleteTaskTemplate: (templateId: string) => Promise<void>;
   addTemplateDependency: (predecessorId: string, successorId: string) => Promise<void>;
   removeTemplateDependency: (dependencyId: string) => Promise<void>;
+  updateTaskFields: (
+    taskId: string,
+    updates: {
+      duration?: number;
+      lag?: number;
+      subcontractor?: string | null;
+      bottleneck_vendor?: string | null;
+    }
+  ) => Promise<void>;
   updateTaskDuration: (taskId: string, duration: number) => Promise<void>;
   updateTaskLag: (taskId: string, lag: number) => Promise<void>;
   updateTaskSubcontractor: (taskId: string, subcontractor: string | null, bottleneck_vendor: string | null) => Promise<void>;
@@ -151,7 +160,79 @@ interface ProjectState {
   redo: () => Promise<void>;
 }
 
-export const useProjectStore = create<ProjectState>((set, get) => ({
+export const useProjectStore = create<ProjectState>((set, get) => {
+  const updateTaskFields = async (
+    taskId: string,
+    updates: {
+      duration?: number;
+      lag?: number;
+      subcontractor?: string | null;
+      bottleneck_vendor?: string | null;
+    }
+  ) => {
+    const { tasks, projects, dependencies } = get();
+    const task = tasks.find((candidate) => candidate.id === taskId);
+    if (!task) return;
+
+    const normalizedUpdates: Partial<EngineTask> = {};
+    const entry: TaskUndoEntry = {
+      type: 'TASK_UPDATE',
+      taskId,
+      prev: {}
+    };
+
+    if (updates.duration !== undefined) {
+      const nextDuration = Math.max(1, updates.duration);
+      if (nextDuration !== task.duration) {
+        normalizedUpdates.duration = nextDuration;
+        entry.prev.duration = task.duration;
+      }
+    }
+
+    if (updates.lag !== undefined && updates.lag !== task.lag) {
+      normalizedUpdates.lag = updates.lag;
+      entry.prev.lag = task.lag;
+    }
+
+    if (updates.subcontractor !== undefined) {
+      const nextSubcontractor = updates.subcontractor?.trim() || null;
+      if (nextSubcontractor !== task.subcontractor) {
+        normalizedUpdates.subcontractor = nextSubcontractor;
+        entry.prev.subcontractor = task.subcontractor;
+      }
+    }
+
+    if (updates.bottleneck_vendor !== undefined) {
+      const nextBottleneckVendor = updates.bottleneck_vendor?.trim() || null;
+      if (nextBottleneckVendor !== task.bottleneck_vendor) {
+        normalizedUpdates.bottleneck_vendor = nextBottleneckVendor;
+        entry.prev.bottleneck_vendor = task.bottleneck_vendor;
+      }
+    }
+
+    if (Object.keys(normalizedUpdates).length === 0) {
+      return;
+    }
+
+    const recalculated = calculateScheduleEngine(
+      projects,
+      tasks.map((candidate) => (candidate.id === taskId ? { ...candidate, ...normalizedUpdates } : candidate)),
+      dependencies
+    );
+
+    set((state) => ({
+      tasks: recalculated,
+      undoStack: [entry, ...state.undoStack].slice(0, 50),
+      redoStack: []
+    }));
+
+    const { error } = await supabase.from('tasks').update(normalizedUpdates).eq('id', taskId);
+    if (error) {
+      console.error('Failed to sync task update to DB:', error);
+    }
+  };
+
+  return ({
       projects: [],
       tasks: [],
       dependencies: [],
@@ -878,88 +959,18 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     await get().fetchData();
   },
 
+  updateTaskFields,
+
   updateTaskDuration: async (taskId: string, duration: number) => {
-    const { tasks, projects, dependencies } = get();
-    const task = tasks.find(t => t.id === taskId);
-    if (!task) return;
-
-    // 1. History for Undo
-    const entry: TaskUndoEntry = {
-      type: 'TASK_UPDATE',
-      taskId,
-      prev: { duration: task.duration }
-    };
-
-    // 2. Optimistic Update & Local Recalculation
-    const updatedTasks = tasks.map(t => 
-      t.id === taskId ? { ...t, duration: Math.max(1, duration) } : t
-    );
-    const recalculated = calculateScheduleEngine(projects, updatedTasks, dependencies);
-    
-    set(state => ({ 
-      tasks: recalculated,
-      undoStack: [entry, ...state.undoStack].slice(0, 50),
-      redoStack: []
-    }));
-
-    // 3. Background Sync
-    const { error } = await supabase.from('tasks').update({ duration: Math.max(1, duration) }).eq('id', taskId);
-    if (error) {
-       console.error('Failed to sync duration to DB:', error);
-       // Revert or show error if critical
-    }
+    await updateTaskFields(taskId, { duration });
   },
 
   updateTaskLag: async (taskId: string, lag: number) => {
-    const { tasks, projects, dependencies } = get();
-    const task = tasks.find(t => t.id === taskId);
-    if (!task) return;
-
-    const entry: TaskUndoEntry = {
-      type: 'TASK_UPDATE',
-      taskId,
-      prev: { lag: task.lag }
-    };
-
-    const updatedTasks = tasks.map(t => 
-      t.id === taskId ? { ...t, lag } : t
-    );
-    const recalculated = calculateScheduleEngine(projects, updatedTasks, dependencies);
-
-    set(state => ({ 
-      tasks: recalculated,
-      undoStack: [entry, ...state.undoStack].slice(0, 50),
-      redoStack: []
-    }));
-
-    const { error } = await supabase.from('tasks').update({ lag }).eq('id', taskId);
-    if (error) console.error('Failed to sync lag to DB:', error);
+    await updateTaskFields(taskId, { lag });
   },
 
   updateTaskSubcontractor: async (taskId: string, subcontractor: string | null, bottleneck_vendor: string | null) => {
-    const { tasks, projects, dependencies } = get();
-    const task = tasks.find(t => t.id === taskId);
-    if (!task) return;
-
-    const entry: TaskUndoEntry = {
-      type: 'TASK_UPDATE',
-      taskId,
-      prev: { subcontractor: task.subcontractor, bottleneck_vendor: task.bottleneck_vendor }
-    };
-
-    const updatedTasks = tasks.map(t => 
-      t.id === taskId ? { ...t, subcontractor, bottleneck_vendor } : t
-    );
-    const recalculated = calculateScheduleEngine(projects, updatedTasks, dependencies);
-
-    set(state => ({ 
-      tasks: recalculated,
-      undoStack: [entry, ...state.undoStack].slice(0, 50),
-      redoStack: []
-    }));
-
-    const { error } = await supabase.from('tasks').update({ subcontractor, bottleneck_vendor }).eq('id', taskId);
-    if (error) console.error('Failed to sync subcontractor to DB:', error);
+    await updateTaskFields(taskId, { subcontractor, bottleneck_vendor });
   },
 
   undo: async () => {
@@ -1037,4 +1048,5 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const { error } = await supabase.from('tasks').update(nextAction.prev).eq('id', nextAction.taskId);
     if (error) console.error('Failed to sync redo to DB:', error);
   }
-}));
+  });
+});

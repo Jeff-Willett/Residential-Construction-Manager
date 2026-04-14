@@ -99,7 +99,22 @@ export function calculateScheduleEngine(
   const vendorOccupancy = new Map<string, { lastBusy: string, taskId: string }>();
 
   const taskMap = new Map<string, EngineTask>();
-  tasks.forEach(t => taskMap.set(t.id, { ...t }));
+  tasks.forEach((task) =>
+    taskMap.set(task.id, {
+      id: task.id,
+      project_id: task.project_id,
+      project_phase_id: task.project_phase_id,
+      template_id: task.template_id,
+      name: task.name,
+      phase_name: task.phase_name,
+      phase_order: task.phase_order,
+      task_order: task.task_order,
+      subcontractor: task.subcontractor,
+      bottleneck_vendor: task.bottleneck_vendor,
+      duration: task.duration,
+      lag: task.lag,
+    })
+  );
   
   const successors = new Map<string, string[]>();
   const predecessors = new Map<string, string[]>();
@@ -186,7 +201,7 @@ export function calculateScheduleEngine(
           const sTask = taskMap.get(succ)!;
           const sPreds = predecessors.get(succ) || [];
           
-          let maxFinish = sTask.logic_start || '1970-01-01';
+          let maxFinish = '1970-01-01';
           for (const p of sPreds) {
              const preTask = taskMap.get(p)!;
              if (parseISO(preTask.calculated_finish!) > parseISO(maxFinish)) {
