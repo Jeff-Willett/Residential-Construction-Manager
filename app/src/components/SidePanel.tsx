@@ -25,8 +25,8 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
   
   const [durationInput, setDurationInput] = useState(task.duration.toString());
   const [vendorInput, setVendorInput] = useState(task.subcontractor || '');
-  const [startDateStr, setStartDateStr] = useState(task.calculated_start || '');
-  const [finishDateStr, setFinishDateStr] = useState(task.calculated_finish || '');
+  const [startDateStr, setStartDateStr] = useState(task.manual_start || task.calculated_start || '');
+  const [finishDateStr, setFinishDateStr] = useState(task.manual_finish || task.calculated_finish || '');
 
   const uniqueVendors = Array.from(new Set(tasks.map(t => t.subcontractor).filter(Boolean))) as string[];
   uniqueVendors.sort();
@@ -34,12 +34,14 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
   useEffect(() => {
     setDurationInput(task.duration.toString());
     setVendorInput(task.subcontractor || '');
-    setStartDateStr(task.calculated_start || '');
-    setFinishDateStr(task.calculated_finish || '');
+    setStartDateStr(task.manual_start || task.calculated_start || '');
+    setFinishDateStr(task.manual_finish || task.calculated_finish || '');
   }, [
     task.id,
     task.duration,
     task.subcontractor,
+    task.manual_start,
+    task.manual_finish,
     task.calculated_start,
     task.calculated_finish
   ]);
@@ -94,7 +96,9 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
       duration: !isNaN(dur) && dur > 0 ? dur : undefined,
       lag: finalLag,
       subcontractor: vendorInput || null,
-      bottleneck_vendor: vendorInput || null
+      bottleneck_vendor: vendorInput || null,
+      manual_start: startDateStr || null,
+      manual_finish: finishDateStr || null
     });
   };
 

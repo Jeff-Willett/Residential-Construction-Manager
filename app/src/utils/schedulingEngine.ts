@@ -71,8 +71,12 @@ export interface EngineTask {
   subcontractor: string | null;
   bottleneck_vendor: string | null;
   duration: number; // working days
-  lag: number; 
-  
+  lag: number;
+
+  // Manual date overrides
+  manual_start?: string | null;
+  manual_finish?: string | null;
+
   // Calculated fields
   logic_start?: string; // When dependencies are met
   calculated_start?: string; // logic_start + resource wait if any
@@ -113,6 +117,8 @@ export function calculateScheduleEngine(
       bottleneck_vendor: task.bottleneck_vendor,
       duration: task.duration,
       lag: task.lag,
+      manual_start: task.manual_start ?? null,
+      manual_finish: task.manual_finish ?? null,
     })
   );
   
@@ -169,8 +175,11 @@ export function calculateScheduleEngine(
     const task = taskMap.get(currId)!;
     
     let actualStart = task.logic_start!;
-    
-    if (task.bottleneck_vendor) {
+
+    // If manual_start is set, use it as the actual start date
+    if (task.manual_start) {
+        actualStart = task.manual_start;
+    } else if (task.bottleneck_vendor) {
         const vendorState = vendorOccupancy.get(task.bottleneck_vendor);
         if (vendorState) {
              const vendorAvailableDate = addWorkingDays(vendorState.lastBusy, 1); // next working day after last busy
@@ -180,9 +189,15 @@ export function calculateScheduleEngine(
              }
         }
     }
-    
+
     task.calculated_start = actualStart;
-    task.calculated_finish = getFinishDateFromDuration(actualStart, task.duration);
+
+    // If manual_finish is set, use it; otherwise calculate from duration
+    if (task.manual_finish) {
+        task.calculated_finish = task.manual_finish;
+    } else {
+        task.calculated_finish = getFinishDateFromDuration(actualStart, task.duration);
+    }
     
     if (task.bottleneck_vendor) {
         vendorOccupancy.set(task.bottleneck_vendor, { lastBusy: task.calculated_finish, taskId: task.id });

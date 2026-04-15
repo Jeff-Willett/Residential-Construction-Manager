@@ -36,7 +36,9 @@ function buildDraftTasks(
     subcontractor: template.subcontractor,
     duration: template.default_days,
     bottleneck_vendor: template.bottleneck_vendor,
-    lag: 0
+    lag: 0,
+    manual_start: null,
+    manual_finish: null
   }));
 }
 
@@ -97,7 +99,9 @@ function buildDraftTasksFromProject(
       subcontractor: task.subcontractor,
       duration: task.duration,
       bottleneck_vendor: task.bottleneck_vendor,
-      lag: task.lag
+      lag: task.lag,
+      manual_start: task.manual_start ?? null,
+      manual_finish: task.manual_finish ?? null
     }));
 }
 
@@ -231,7 +235,9 @@ export function AddProjectModal(props: AddProjectModalProps) {
           subcontractor: draft.subcontractor,
           bottleneck_vendor: draft.bottleneck_vendor,
           duration: Math.max(1, draft.duration),
-          lag: draft.lag ?? 0
+          lag: draft.lag ?? 0,
+          manual_start: draft.manual_start ?? null,
+          manual_finish: draft.manual_finish ?? null
         };
       });
 
@@ -296,7 +302,9 @@ export function AddProjectModal(props: AddProjectModalProps) {
     subcontractor: null,
     duration: 1,
     bottleneck_vendor: null,
-    lag: 0
+    lag: 0,
+    manual_start: null,
+    manual_finish: null
   });
 
   const addScope = (phaseTemplateId: string | null = phaseTemplates[0]?.id ?? null) => {
@@ -511,9 +519,9 @@ export function AddProjectModal(props: AddProjectModalProps) {
                       </div>
                     </div>
                     <div className="overflow-x-auto">
-                      <div className="min-w-[1260px]">
+                      <div className="min-w-[1380px]">
                         <div className="border-b border-slate-800 bg-slate-950/60 px-4 py-2">
-                          <div className="grid gap-2 xl:grid-cols-[150px_56px_minmax(220px,1.6fr)_minmax(150px,1fr)_72px_minmax(150px,1fr)_92px_92px_152px]">
+                          <div className="grid gap-2 xl:grid-cols-[150px_56px_minmax(220px,1.6fr)_minmax(150px,1fr)_72px_minmax(150px,1fr)_128px_128px_152px]">
                             <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Phase</div>
                             <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Order</div>
                             <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Scope Item</div>
@@ -528,7 +536,7 @@ export function AddProjectModal(props: AddProjectModalProps) {
                         <div className="divide-y divide-slate-800">
                           {section.tasks.map((draft) => (
                             <div key={draft.localId} className="px-4 py-2">
-                              <div className="grid gap-2 xl:grid-cols-[150px_56px_minmax(220px,1.6fr)_minmax(150px,1fr)_72px_minmax(150px,1fr)_92px_92px_152px]">
+                              <div className="grid gap-2 xl:grid-cols-[150px_56px_minmax(220px,1.6fr)_minmax(150px,1fr)_72px_minmax(150px,1fr)_128px_128px_152px]">
                                 <select
                                   value={draft.phase_template_id ?? ''}
                                   onChange={(event) =>
@@ -600,15 +608,37 @@ export function AddProjectModal(props: AddProjectModalProps) {
                                   placeholder="Bottleneck vendor"
                                   className="h-9 rounded-md border border-slate-700 bg-slate-900 px-2 text-sm text-slate-100 focus:border-cyan-500 focus:outline-none"
                                 />
-                                <div className="flex h-9 items-center rounded-md border border-slate-800 bg-slate-950 px-2">
-                                  <div className="text-sm text-slate-200 whitespace-nowrap">
-                                    {scheduledDrafts.get(draft.localId)?.calculated_start ?? '--'}
-                                  </div>
+                                <div className="relative">
+                                  <CalendarDays
+                                    size={14}
+                                    className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-slate-500"
+                                  />
+                                  <input
+                                    type="date"
+                                    value={draft.manual_start ?? scheduledDrafts.get(draft.localId)?.calculated_start ?? ''}
+                                    onChange={(event) =>
+                                      updateDraft(draft.localId, {
+                                        manual_start: event.target.value || null
+                                      })
+                                    }
+                                    className="h-9 w-full rounded-md border border-slate-700 bg-slate-900 py-2 pl-7 pr-2 text-sm text-slate-100 focus:border-cyan-500 focus:outline-none"
+                                  />
                                 </div>
-                                <div className="flex h-9 items-center rounded-md border border-slate-800 bg-slate-950 px-2">
-                                  <div className="text-sm text-slate-200 whitespace-nowrap">
-                                    {scheduledDrafts.get(draft.localId)?.calculated_finish ?? '--'}
-                                  </div>
+                                <div className="relative">
+                                  <CalendarDays
+                                    size={14}
+                                    className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-slate-500"
+                                  />
+                                  <input
+                                    type="date"
+                                    value={draft.manual_finish ?? scheduledDrafts.get(draft.localId)?.calculated_finish ?? ''}
+                                    onChange={(event) =>
+                                      updateDraft(draft.localId, {
+                                        manual_finish: event.target.value || null
+                                      })
+                                    }
+                                    className="h-9 w-full rounded-md border border-slate-700 bg-slate-900 py-2 pl-7 pr-2 text-sm text-slate-100 focus:border-cyan-500 focus:outline-none"
+                                  />
                                 </div>
                                 <div className="flex h-9 items-center gap-1">
                                   <button
