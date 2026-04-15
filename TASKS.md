@@ -15,6 +15,13 @@ This project is edited in both **Windsurf** and **Anti-gravity** IDEs.
 ## 🔨 In Progress
 - *None*
 
+## ✅ Completed
+- [x] [WS] Issue 19 - Editable project dates now persist on save.
+  - Wired `manual_start`/`manual_finish` through side panel save payload, store updates, fetch mapping, and scheduling engine recalculation.
+  - Fixed side panel initialization to prefer saved manual dates over recalculated defaults.
+  - Restored editable task Start/Finish date inputs (with calendar icons) in Edit Project modal and persisted those values through project save.
+  - Verified build passes (`npm run build`).
+
 ## 🚀 Feature Requests
 - [ ] **Multi-User Collaboration**: Allow multiple project managers to edit simultaneously.
 - [ ] **Email Reports**: Send a weekly "Bottleneck Summary" to specific subcontractors.

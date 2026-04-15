@@ -175,12 +175,21 @@ function resolveTargetEnv(requestedEnv) {
   const name = requestedEnv || env.TESTING_DATA_DEFAULT_ENV || 'branch-super-base';
 
   if (name === 'branch-super-base') {
+    const resolvedUrl =
+      env.BRANCH_SUPER_BASE_SUPABASE_URL ||
+      env.VITE_SUPABASE_URL ||
+      env.APP_VITE_SUPABASE_URL;
+
+    const productionUrl = env.PRODUCTION_SUPABASE_URL;
+    if (productionUrl && resolvedUrl === productionUrl) {
+      throw new Error(
+        'Resolved branch-super-base URL matches the production URL — BRANCH_SUPER_BASE_SUPABASE_URL is missing or wrong in .env.local. Refusing to proceed.'
+      );
+    }
+
     return {
       name,
-      url:
-        env.BRANCH_SUPER_BASE_SUPABASE_URL ||
-        env.VITE_SUPABASE_URL ||
-        env.APP_VITE_SUPABASE_URL,
+      url: resolvedUrl,
       serviceRoleKey:
         env.BRANCH_SUPER_BASE_SERVICE_ROLE_KEY ||
         env.SUPABASE_SERVICE_ROLE_KEY,

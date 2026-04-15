@@ -1,0 +1,25 @@
+# Windsurf AI Rules — Residential Construction Gantt Manager
+
+## Cross-IDE Awareness
+This project is also edited in Anti-gravity IDE (.adal/).
+- Do NOT modify files in .adal/ or .adalrules
+- Check TASKS.md before starting work — tasks marked [AG] belong to Anti-gravity
+- After completing work, update TASKS.md with what was done
+- Do not commit changes to files Anti-gravity may be actively editing (check TASKS.md for [AG] in-progress items)
+
+## Project Context
+- Stack: React + TypeScript + Vite, Supabase backend, Vercel deployment
+- Database: Supabase with RPC functions for all data access
+- Scheduling engine: collision detection and constraint propagation in app/src/lib/
+- Testing data: managed via scripts/testing-data.mjs and snapshots/
+
+## Code Conventions
+- Use Supabase RPC for all data access — no direct table queries from the frontend
+- Follow existing file organization in app/src/components/ and app/src/lib/
+- Keep scheduling engine logic isolated in app/src/lib/scheduling/
+
+## Task Protocol
+- Before starting a task, check TASKS.md for ownership tags
+- Mark tasks you start with [WS] (Windsurf)
+- After completing, move the task to Completed and note what was done
+- Log architectural decisions in docs/decisions.md so Anti-gravity stays informed
