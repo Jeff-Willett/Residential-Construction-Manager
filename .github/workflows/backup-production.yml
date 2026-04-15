@@ -1,14 +1,17 @@
-name: Daily Production Backup
+name: Production Backup
 
 on:
   schedule:
-    # Runs daily at 06:00 UTC (02:00 AM ET)
+    # Hourly backup — runs every hour at :00
+    - cron: '0 * * * *'
+    # Daily backup — runs at 06:00 UTC (02:00 AM ET)
     - cron: '0 6 * * *'
   workflow_dispatch:
     # Allows manual trigger from the GitHub Actions UI
 
 jobs:
-  backup:
+  hourly-backup:
+    name: Hourly Backup (5-day retention)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -17,7 +20,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Install dependencies
@@ -27,11 +30,41 @@ jobs:
         env:
           PRODUCTION_SUPABASE_URL: ${{ secrets.PRODUCTION_SUPABASE_URL }}
           PRODUCTION_SERVICE_ROLE_KEY: ${{ secrets.PRODUCTION_SERVICE_ROLE_KEY }}
-        run: node scripts/testing-data.mjs backup --env production
+        run: node scripts/testing-data.mjs backup --env production --label hourly
 
-      - name: Upload backup artifact
+      - name: Upload hourly artifact (5-day retention)
         uses: actions/upload-artifact@v4
         with:
-          name: production-backup-${{ github.run_id }}
+          name: production-backup-hourly-${{ github.run_id }}
+          path: snapshots/backups/
+          retention-days: 5
+
+  daily-backup:
+    name: Daily Backup (90-day retention)
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '0 6 * * *' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run production backup
+        env:
+          PRODUCTION_SUPABASE_URL: ${{ secrets.PRODUCTION_SUPABASE_URL }}
+          PRODUCTION_SERVICE_ROLE_KEY: ${{ secrets.PRODUCTION_SERVICE_ROLE_KEY }}
+        run: node scripts/testing-data.mjs backup --env production --label daily
+
+      - name: Upload daily artifact (90-day retention)
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-backup-daily-${{ github.run_id }}
           path: snapshots/backups/
           retention-days: 90
