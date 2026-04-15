@@ -300,7 +300,9 @@ export function AddProjectModal(props: AddProjectModalProps) {
     subcontractor: null,
     duration: 1,
     bottleneck_vendor: null,
-    lag: 0
+    lag: 0,
+    manual_start: null,
+    manual_finish: null
   });
 
   const addScope = (phaseTemplateId: string | null = phaseTemplates[0]?.id ?? null) => {
