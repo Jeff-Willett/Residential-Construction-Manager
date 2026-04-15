@@ -120,6 +120,24 @@ interface ProjectPhaseRow {
   phase_order: number;
 }
 
+function formatDbError(error: unknown, fallback: string): Error {
+  if (!error || typeof error !== 'object') {
+    return new Error(fallback);
+  }
+
+  const errorRecord = error as Record<string, unknown>;
+  const code = typeof errorRecord.code === 'string' ? errorRecord.code : null;
+  const message = typeof errorRecord.message === 'string' ? errorRecord.message : null;
+  const details = typeof errorRecord.details === 'string' ? errorRecord.details : null;
+  const hint = typeof errorRecord.hint === 'string' ? errorRecord.hint : null;
+
+  const parts = [fallback, code ? `code=${code}` : null, message, details, hint].filter(
+    (part): part is string => Boolean(part)
+  );
+
+  return new Error(parts.join(' | '));
+}
+
 interface ProjectState {
   projects: Project[];
   tasks: EngineTask[];
@@ -445,7 +463,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       .single();
 
     if (projErr || !projData) {
-      throw projErr ?? new Error('Failed to create project.');
+      throw formatDbError(projErr, 'Failed to create project record.');
     }
 
     const projectId = projData.id;
@@ -471,7 +489,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       const { data, error: phasesErr } = await supabase.from('project_phases').insert(phaseInserts).select();
 
       if (phasesErr || !data) {
-        throw phasesErr ?? new Error('Failed to insert project phases.');
+        throw formatDbError(phasesErr, 'Failed to insert project phases.');
       }
 
       insertedPhases = data as ProjectPhaseRow[];
@@ -511,7 +529,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       .select();
 
     if (tasksErr || !insertedTasks) {
-      throw tasksErr ?? new Error('Failed to insert tasks.');
+      throw formatDbError(tasksErr, 'Failed to insert project tasks.');
     }
 
     // 4. Insert Dependencies
@@ -533,7 +551,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
 
     if (depInserts.length > 0) {
       const { error: depErr } = await supabase.from('dependencies').insert(depInserts);
-      if (depErr) throw depErr;
+      if (depErr) throw formatDbError(depErr, 'Failed to insert project dependencies.');
     }
 
     // Refresh everything to reflect changes
