@@ -1,0 +1,105 @@
+# Pre-Production Gate Skill
+# Trigger this skill before approving or merging any production-sensitive change.
+# This skill exists because a delete-then-rebuild in the project edit flow wiped
+# production tasks and dependencies in April 2026. See docs/decisions.md for context.
+
+## When to Trigger
+
+Trigger this skill whenever a change touches ANY of the following:
+- `app/src/store/projectStore.ts`
+- `app/src/lib/supabase.ts`
+- `supabase/migrations/*`
+- Any file that calls `.delete()`, `.insert()`, `.update()`, or `.upsert()` on Supabase tables
+- Any file that edits, rebuilds, or reconstructs project, phase, task, or dependency records
+- Environment variable configuration (`.env.*`)
+
+## Step 1: Classify Risk
+
+Read the changed files and assign a risk level:
+
+- **Low**: Visual/UI only — no Supabase writes, no store mutations, no data flows changed
+- **Medium**: Local state or scheduling logic only — no DB writes, no migrations
+- **High**: Any Supabase write, migration, project/task/dependency edit, delete, rebuild, or environment change
+
+If HIGH risk, all remaining steps are mandatory. Do not skip any.
+
+## Step 2: Scan for Risky Persistence Patterns
+
+Search changed files for these patterns and flag every instance found:
+
+1. `.delete()` call followed by `.insert()` or `.upsert()` without an intervening Supabase RPC boundary
+2. Multi-table writes (phases + tasks + dependencies) not wrapped in a single server-side RPC function
+3. Delete-then-rebuild sequences where the delete commits before the inserts are confirmed successful
+4. Writes that depend on in-memory array ordering to reconstruct foreign-key relationships
+5. Error handling that catches failures after destructive writes but cannot undo the damage
+
+For each flagged pattern, state:
+- The file and approximate location
+- Why it is risky
+- What failure scenario it creates
+
+## Step 3: Verify Rollback Safety
+
+For every high-risk write path, confirm ALL of the following are true:
+
+- [ ] The write is wrapped in a Supabase RPC function that runs as a single database transaction
+- [ ] OR: if not using an RPC, there is explicit rollback logic that restores prior state on any failure
+- [ ] Partial failure cannot leave the database with orphaned rows, empty task lists, or missing dependencies
+- [ ] The operation is idempotent OR is safe to retry without duplicating data
+
+If any of these are false, **do not approve the change for production**. State clearly what needs to be fixed.
+
+## Step 4: Verify Environment Targeting
+
+Before any production deploy, confirm:
+
+- [ ] The correct Supabase URL is set for the target environment (local / preview / production)
+- [ ] The change has been tested against an environment that is NOT production
+- [ ] The developer knows which environment they are about to modify
+- [ ] If data migrations run: the developer has confirmed whether a data backup or snapshot exists
+
+## Step 5: Run Required Checks
+
+Execute these commands from the `app/` directory and confirm all pass:
+
+```
+npm run build
+```
+
+This runs `tsc -b && vite build` — covers both typecheck and build.
+
+If a test suite exists:
+```
+npm test
+```
+
+Report: pass / fail for each command. Do not continue to Step 6 if any command fails.
+
+## Step 6: Produce Deploy-Risk Summary
+
+Write a short plain-language summary with exactly these fields:
+
+```
+RISK LEVEL: [Low / Medium / High]
+AFFECTED DATA PATHS: [list tables/flows touched]
+RISKY PATTERNS FOUND: [yes — describe / no]
+ROLLBACK SAFETY: [confirmed / NOT confirmed — describe gap]
+BUILD: [pass / fail]
+TESTS: [pass / fail / not configured]
+ENVIRONMENT VERIFIED: [yes / no / unknown]
+RECOMMENDATION: [safe to deploy / do not deploy — reason]
+```
+
+## Step 7: Gate Decision
+
+- If RISK LEVEL is Low or Medium and all checks pass → approve for merge/deploy
+- If RISK LEVEL is High and rollback safety is confirmed and all checks pass → approve for merge/deploy with the summary attached to the PR
+- If RISK LEVEL is High and rollback safety is NOT confirmed → **refuse to recommend production deploy**. State exactly what must be fixed (RPC transaction wrapping, rollback guard, etc.) before this can proceed.
+
+## Non-Negotiable Rules
+
+- No destructive multi-table production write without a Supabase RPC transaction or explicit rollback guard
+- No merge of high-risk persistence changes to `main` without this skill completing Steps 1–6
+- No production deploy from an unreviewed branch
+- No assumption that "works locally" means "safe in production"
+- No skipping this gate because the change "looks small"

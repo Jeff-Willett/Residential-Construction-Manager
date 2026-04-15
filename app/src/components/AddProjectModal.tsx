@@ -519,9 +519,9 @@ export function AddProjectModal(props: AddProjectModalProps) {
                       </div>
                     </div>
                     <div className="overflow-x-auto">
-                      <div className="min-w-[1380px]">
+                      <div className="min-w-[1286px]">
                         <div className="border-b border-slate-800 bg-slate-950/60 px-4 py-2">
-                          <div className="grid gap-2 xl:grid-cols-[150px_56px_minmax(220px,1.6fr)_minmax(150px,1fr)_72px_minmax(150px,1fr)_128px_128px_152px]">
+                          <div className="grid gap-2 xl:grid-cols-[150px_56px_minmax(220px,1.6fr)_minmax(150px,1fr)_72px_72px_150px_150px_152px]">
                             <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Phase</div>
                             <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Order</div>
                             <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Scope Item</div>
@@ -536,7 +536,7 @@ export function AddProjectModal(props: AddProjectModalProps) {
                         <div className="divide-y divide-slate-800">
                           {section.tasks.map((draft) => (
                             <div key={draft.localId} className="px-4 py-2">
-                              <div className="grid gap-2 xl:grid-cols-[150px_56px_minmax(220px,1.6fr)_minmax(150px,1fr)_72px_minmax(150px,1fr)_128px_128px_152px]">
+                              <div className="grid gap-2 xl:grid-cols-[150px_56px_minmax(220px,1.6fr)_minmax(150px,1fr)_72px_72px_150px_150px_152px]">
                                 <select
                                   value={draft.phase_template_id ?? ''}
                                   onChange={(event) =>
@@ -598,48 +598,30 @@ export function AddProjectModal(props: AddProjectModalProps) {
                                   }
                                   className="h-9 rounded-md border border-slate-700 bg-slate-900 px-2 text-sm text-slate-100 focus:border-cyan-500 focus:outline-none"
                                 />
+                                <div className="flex h-9 items-center justify-center">
+                                  <input
+                                    type="checkbox"
+                                    checked={!!draft.bottleneck_vendor}
+                                    onChange={(event) =>
+                                      updateDraft(draft.localId, {
+                                        bottleneck_vendor: event.target.checked ? draft.subcontractor || null : null
+                                      })
+                                    }
+                                    className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-cyan-500 focus:ring-cyan-500 focus:ring-offset-slate-900"
+                                  />
+                                </div>
                                 <input
-                                  value={draft.bottleneck_vendor ?? ''}
-                                  onChange={(event) =>
-                                    updateDraft(draft.localId, {
-                                      bottleneck_vendor: event.target.value || null
-                                    })
-                                  }
-                                  placeholder="Bottleneck vendor"
-                                  className="h-9 rounded-md border border-slate-700 bg-slate-900 px-2 text-sm text-slate-100 focus:border-cyan-500 focus:outline-none"
+                                  type="date"
+                                  value={draft.manual_start ?? scheduledDrafts.get(draft.localId)?.calculated_start ?? ''}
+                                  onChange={(event) => updateDraft(draft.localId, { manual_start: event.target.value })}
+                                  className="h-9 w-full rounded-md border border-slate-700 bg-slate-900 px-2 text-sm text-slate-100 focus:border-cyan-500 focus:outline-none"
                                 />
-                                <div className="relative">
-                                  <CalendarDays
-                                    size={14}
-                                    className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-slate-500"
-                                  />
-                                  <input
-                                    type="date"
-                                    value={draft.manual_start ?? scheduledDrafts.get(draft.localId)?.calculated_start ?? ''}
-                                    onChange={(event) =>
-                                      updateDraft(draft.localId, {
-                                        manual_start: event.target.value || null
-                                      })
-                                    }
-                                    className="h-9 w-full rounded-md border border-slate-700 bg-slate-900 py-2 pl-7 pr-2 text-sm text-slate-100 focus:border-cyan-500 focus:outline-none"
-                                  />
-                                </div>
-                                <div className="relative">
-                                  <CalendarDays
-                                    size={14}
-                                    className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-slate-500"
-                                  />
-                                  <input
-                                    type="date"
-                                    value={draft.manual_finish ?? scheduledDrafts.get(draft.localId)?.calculated_finish ?? ''}
-                                    onChange={(event) =>
-                                      updateDraft(draft.localId, {
-                                        manual_finish: event.target.value || null
-                                      })
-                                    }
-                                    className="h-9 w-full rounded-md border border-slate-700 bg-slate-900 py-2 pl-7 pr-2 text-sm text-slate-100 focus:border-cyan-500 focus:outline-none"
-                                  />
-                                </div>
+                                <input
+                                  type="date"
+                                  value={draft.manual_finish ?? scheduledDrafts.get(draft.localId)?.calculated_finish ?? ''}
+                                  onChange={(event) => updateDraft(draft.localId, { manual_finish: event.target.value })}
+                                  className="h-9 w-full rounded-md border border-slate-700 bg-slate-900 px-2 text-sm text-slate-100 focus:border-cyan-500 focus:outline-none"
+                                />
                                 <div className="flex h-9 items-center gap-1">
                                   <button
                                     onClick={() => moveScope(draft.localId, -1)}

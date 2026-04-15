@@ -61,5 +61,8 @@ yarn-error.log*
 skills/
 skills-lock.json
 
+# Database backups (stored as GitHub Actions artifacts, not in repo)
+snapshots/backups/
+
 # Supabase local temp metadata
 supabase/.temp/

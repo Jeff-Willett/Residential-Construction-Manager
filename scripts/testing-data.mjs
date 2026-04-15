@@ -5,6 +5,7 @@ import path from 'node:path';
 const repoRoot = process.cwd();
 const snapshotsDir = path.join(repoRoot, 'snapshots', 'testing-data');
 const latestSnapshotPath = path.join(snapshotsDir, 'latest.json');
+const backupsDir = path.join(repoRoot, 'snapshots', 'backups');
 
 const tableConfigs = [
   { name: 'projects', orderBy: 'id.asc', deleteFilter: 'id=not.is.null' },
@@ -52,6 +53,9 @@ async function main() {
       return;
     case 'refresh':
       await runRefresh();
+      return;
+    case 'backup':
+      await runBackup();
       return;
     default:
       printHelp();
@@ -142,6 +146,28 @@ async function runRefresh() {
 
   console.log(`Refreshed ${target.name} from ${path.relative(repoRoot, snapshotPath)}`);
   console.log(`Safety backup: ${path.relative(repoRoot, backupPath)}`);
+}
+
+async function runBackup() {
+  mkdirSync(backupsDir, { recursive: true });
+  const target = resolveTargetEnv(options.env || 'production');
+  const snapshot = await fetchSnapshot(target);
+  const timestamp = new Date().toISOString().replaceAll(':', '-').replaceAll('.', '-');
+  const label = sanitizeLabel(options.label || `${target.name}-backup`);
+  const filename = `${timestamp}-${label}.json`;
+  const outputPath = path.join(backupsDir, filename);
+  const latestBackupPath = path.join(backupsDir, `latest-${target.name}.json`);
+
+  writeSnapshot(outputPath, snapshot);
+  writeSnapshot(latestBackupPath, snapshot);
+
+  const totalRows = Object.values(snapshot.counts).reduce((sum, n) => sum + n, 0);
+  console.log(`Backup complete for ${target.name}`);
+  console.log(`- Tables: ${Object.keys(snapshot.counts).length}`);
+  console.log(`- Total rows: ${totalRows}`);
+  console.log(`- Checksum: ${snapshot.checksum}`);
+  console.log(`- File: ${path.relative(repoRoot, outputPath)}`);
+  console.log(`- Latest: ${path.relative(repoRoot, latestBackupPath)}`);
 }
 
 function resolveTargetEnv(requestedEnv) {
@@ -401,6 +427,8 @@ function printHelp() {
   npm run testing:status -- [--env branch-super-base|production] [--snapshot snapshots/testing-data/latest.json]
   npm run testing:snapshot -- --label "baseline-super-base" [--env branch-super-base|production]
   npm run testing:refresh -- [--env branch-super-base|production] [--snapshot snapshots/testing-data/latest.json] [--allow-production-refresh]
+  npm run backup:production
+  node scripts/testing-data.mjs backup [--env production|branch-super-base] [--label my-label]
 `);
 }
 
