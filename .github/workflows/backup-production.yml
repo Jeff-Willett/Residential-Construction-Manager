@@ -1,0 +1,37 @@
+name: Daily Production Backup
+
+on:
+  schedule:
+    # Runs daily at 06:00 UTC (02:00 AM ET)
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    # Allows manual trigger from the GitHub Actions UI
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run production backup
+        env:
+          PRODUCTION_SUPABASE_URL: ${{ secrets.PRODUCTION_SUPABASE_URL }}
+          PRODUCTION_SERVICE_ROLE_KEY: ${{ secrets.PRODUCTION_SERVICE_ROLE_KEY }}
+        run: node scripts/testing-data.mjs backup --env production
+
+      - name: Upload backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-backup-${{ github.run_id }}
+          path: snapshots/backups/
+          retention-days: 90

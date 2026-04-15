@@ -1,0 +1,143 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+defaults:
+  run:
+    working-directory: app
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+      - run: npm run build
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+
+  detect-risky-patterns:
+    name: Detect Risky DB Patterns
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get changed files
+        id: changed
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git diff --name-only origin/${{ github.base_ref }}...HEAD > /tmp/changed_files.txt
+          else
+            git diff --name-only HEAD~1 HEAD > /tmp/changed_files.txt
+          fi
+          echo "Changed files:"
+          cat /tmp/changed_files.txt
+        working-directory: .
+
+      - name: Scan for delete-then-insert patterns
+        run: |
+          RISKY=0
+          while IFS= read -r file; do
+            if [[ ! -f "$file" ]]; then continue; fi
+            if [[ "$file" != *.ts && "$file" != *.tsx ]]; then continue; fi
+            if grep -n "\.delete()" "$file" > /tmp/deletes.txt 2>/dev/null; then
+              if grep -n "\.insert\|\.upsert" "$file" > /tmp/inserts.txt 2>/dev/null; then
+                DELETE_LINE=$(head -1 /tmp/deletes.txt | cut -d: -f1)
+                INSERT_LINE=$(head -1 /tmp/inserts.txt | cut -d: -f1)
+                if [ -n "$DELETE_LINE" ] && [ -n "$INSERT_LINE" ] && [ "$DELETE_LINE" -lt "$INSERT_LINE" ]; then
+                  echo "::warning file=$file,line=$DELETE_LINE::Risky pattern detected: .delete() appears before .insert()/.upsert() in $file. Verify this is wrapped in a Supabase RPC transaction or has rollback protection."
+                  RISKY=1
+                fi
+              fi
+            fi
+          done < /tmp/changed_files.txt
+          if [ "$RISKY" -eq 1 ]; then
+            echo ""
+            echo "WARNING: Risky delete-before-insert patterns found in changed files."
+            echo "This does not automatically fail the build, but requires review."
+            echo "Run the pre-production-gate skill and attach the summary to this PR."
+          fi
+        working-directory: .
+
+      - name: Flag high-risk file changes
+        run: |
+          HIGH_RISK_FILES=(
+            "app/src/store/projectStore.ts"
+            "app/src/lib/supabase.ts"
+          )
+          FLAGGED=0
+          while IFS= read -r file; do
+            for hrf in "${HIGH_RISK_FILES[@]}"; do
+              if [[ "$file" == "$hrf" ]]; then
+                echo "::warning file=$file::High-risk file changed: $file. Ensure the pre-production-gate skill has been run and the PR checklist is complete."
+                FLAGGED=1
+              fi
+            done
+            if [[ "$file" == supabase/migrations/* ]]; then
+              echo "::warning file=$file::Migration file changed: $file. Confirm rollback safety and environment targeting before merging."
+              FLAGGED=1
+            fi
+          done < /tmp/changed_files.txt
+          if [ "$FLAGGED" -eq 1 ]; then
+            echo ""
+            echo "WARNING: High-risk files changed. Manual review of the PR checklist is required."
+          fi
+        working-directory: .
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+      - name: Run tests (if configured)
+        run: |
+          if npm run test --if-present 2>&1 | grep -q "Missing script"; then
+            echo "No test suite configured yet. Add Vitest regression tests (Phase 4) to enforce this check."
+            exit 0
+          fi
+          npm test
