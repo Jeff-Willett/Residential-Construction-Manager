@@ -28,5 +28,17 @@ This file logs key decisions so both Windsurf and Anti-gravity AIs stay informed
 - **Decision**: Task row start/finish cells use native `input[type="date"]` controls bound to persisted `manual_start` / `manual_finish` values, with compact column widths sized just large enough for the full date and picker affordance
 - **Rationale**: Keeps dates editable and savable, preserves browser-native date picker behavior, and avoids oversized columns that hide adjacent row actions
 
+### ADR-005: Pre-Production Safety Gate [WS]
+- **Date**: 2026-04-14
+- **Context**: Production incident wiped all tasks and dependencies. Root cause: project edit flow used delete-then-rebuild across multiple tables with no database transaction. Partial failure after deletes left production empty.
+- **Decision**: Three-layer pre-production gate implemented:
+  1. `.skills/pre-production-gate.skill` — agent skill that classifies risk, scans for `.delete()→.insert()` patterns, verifies rollback safety, runs build/typecheck, produces a deploy-risk summary, and refuses to greenlight production deploy if rollback safety is absent.
+  2. `.github/PULL_REQUEST_TEMPLATE.md` — mandatory PR checklist covering persistence safety, rollback plan, environment verification, and skill sign-off for high-risk changes.
+  3. `.github/workflows/ci.yml` — CI on every push/PR to `main`: Build, Typecheck, Lint, risky-pattern detection, test placeholder.
+  4. Branch protection on `main` — required status checks (Build, Typecheck, Lint, Detect Risky DB Patterns), 1 PR review required, stale reviews dismissed on push.
+- **High-risk files flagged**: `app/src/store/projectStore.ts`, `app/src/lib/supabase.ts`, `supabase/migrations/*`
+- **Still pending**: Phase 3 — refactor project edit flow into a transaction-safe Supabase RPC. Phase 4 — add Vitest regression tests for edit/rebuild failure paths.
+- **References**: `PRE_PRODUCTION_GATE_WRITEUP.md`, `docs/runbooks/production-backups.md`
+
 ---
 *New decisions should be added here as the project evolves.*

@@ -6,7 +6,8 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "testing:status": "node scripts/testing-data.mjs status",
     "testing:refresh": "node scripts/testing-data.mjs refresh",
-    "testing:snapshot": "node scripts/testing-data.mjs snapshot"
+    "testing:snapshot": "node scripts/testing-data.mjs snapshot",
+    "backup:production": "node scripts/testing-data.mjs backup --env production"
   },
   "repository": {
     "type": "git",
