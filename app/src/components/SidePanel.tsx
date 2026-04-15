@@ -25,6 +25,7 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
   
   const [durationInput, setDurationInput] = useState(task.duration.toString());
   const [vendorInput, setVendorInput] = useState(task.subcontractor || '');
+  const [isResourceConstrained, setIsResourceConstrained] = useState(Boolean(task.bottleneck_vendor));
   const [startDateStr, setStartDateStr] = useState(task.manual_start || task.calculated_start || '');
   const [finishDateStr, setFinishDateStr] = useState(task.manual_finish || task.calculated_finish || '');
 
@@ -34,12 +35,14 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
   useEffect(() => {
     setDurationInput(task.duration.toString());
     setVendorInput(task.subcontractor || '');
+    setIsResourceConstrained(Boolean(task.bottleneck_vendor));
     setStartDateStr(task.manual_start || task.calculated_start || '');
     setFinishDateStr(task.manual_finish || task.calculated_finish || '');
   }, [
     task.id,
     task.duration,
     task.subcontractor,
+    task.bottleneck_vendor,
     task.manual_start,
     task.manual_finish,
     task.calculated_start,
@@ -76,12 +79,15 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
   const project = projects.find(p => p.id === task.project_id);
   const conflictTask = task.delay_cause_task_id ? tasks.find(t => t.id === task.delay_cause_task_id) : null;
   const conflictProject = conflictTask ? projects.find(p => p.id === conflictTask.project_id) : null;
+  const conflictProjectName = conflictProject?.name || task.delay_cause_project_name || null;
+  const conflictTaskName = conflictTask?.name || task.delay_cause_task_name || null;
 
   const predIds = dependencies.filter(d => d.successor_id === task.id).map(d => d.predecessor_id);
   const predecessors = tasks.filter(t => predIds.includes(t.id));
   const latestPred = [...predecessors].sort((a,b) => (b.calculated_finish || '').localeCompare(a.calculated_finish || ''))[0];
-  const hasLogicConflict = (task.lag || 0) < 0 && latestPred;
+  const hasLogicConflict = ((task.logic_violation_days || 0) > 0 || (task.lag || 0) < 0) && latestPred;
   const acceptedLag = (task.lag || 0) + (task.delay_days || 0);
+  const hasVendorCollision = (task.delay_days || 0) > 0 && Boolean(task.bottleneck_vendor) && Boolean(task.delay_cause_task_id || task.delay_cause_task_name);
 
   const handleSave = async () => {
     const dur = parseInt(durationInput, 10);
@@ -96,7 +102,7 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
       duration: !isNaN(dur) && dur > 0 ? dur : undefined,
       lag: finalLag,
       subcontractor: vendorInput || null,
-      bottleneck_vendor: vendorInput || null,
+      bottleneck_vendor: isResourceConstrained && vendorInput ? vendorInput : null,
       manual_start: startDateStr || null,
       manual_finish: finishDateStr || null
     });
@@ -116,7 +122,7 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
 
       <div className="p-4 flex-1 overflow-auto space-y-6">
         <div>
-           <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Subcontractor Constraint</p>
+           <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Subcontractor</p>
            <select 
              value={vendorInput}
              onChange={(e) => setVendorInput(e.target.value)}
@@ -125,6 +131,16 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
              <option value="">Unassigned (No constraints)</option>
              {uniqueVendors.map(v => <option key={v} value={v}>{v}</option>)}
            </select>
+
+           <label className="flex items-center gap-2 mb-4 text-sm text-slate-300">
+             <input
+               type="checkbox"
+               checked={isResourceConstrained}
+               onChange={(e) => setIsResourceConstrained(e.target.checked)}
+               className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-cyan-500 focus:ring-cyan-500/50"
+             />
+             <span>Treat this subcontractor as a single-resource bottleneck</span>
+           </label>
 
            <div className="grid grid-cols-2 gap-3 mb-4">
                <div className="col-span-2">
@@ -178,7 +194,7 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
            </div>
            
            {/* Bottleneck Resolution Engine */}
-           {(task.delay_days || 0) > 0 && (
+           {hasVendorCollision && (
              <div className="mb-4 bg-red-500/10 border border-red-500/30 p-3 rounded-md flex flex-col space-y-3">
                 <div className="flex items-start space-x-2">
                   <AlertTriangle size={16} className="text-red-400 mt-0.5 flex-shrink-0" />
@@ -187,8 +203,8 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
                      <span className="text-slate-300 text-xs mt-1 block">
                        Task logic was ready on <span className="font-bold text-white">{format(parseISO(task.logic_start!), 'MMM d')}</span>. 
                        However, <span className="font-bold text-white">{task.bottleneck_vendor}</span> is actively deployed on 
-                       <span className="font-bold text-cyan-300"> Project {conflictProject?.name || 'Unknown'} </span> 
-                       performing the <span className="italic">{conflictTask?.name || 'Unknown Task'}</span>.
+                       <span className="font-bold text-cyan-300"> {conflictProjectName ? `Project ${conflictProjectName}` : 'another scheduled project'} </span> 
+                       performing the <span className="italic">{conflictTaskName || 'blocking task'}</span>.
                      </span>
                      <span className="text-red-300 text-xs font-semibold block mt-1">Total Delay Penalty: {task.delay_days} days.</span>
                   </div>
@@ -243,7 +259,7 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
                        This task is forced to start before its predecessor <span className="font-bold text-white">{latestPred.name}</span> is finished. 
                        Predecessor finishes on <span className="font-bold text-white">{format(parseISO(latestPred.calculated_finish!), 'MMM d')}</span>.
                      </span>
-                     <span className="text-orange-300 text-xs font-semibold block mt-1">Overlap Penalty: {Math.abs(task.lag || 0)} days.</span>
+                     <span className="text-orange-300 text-xs font-semibold block mt-1">Overlap Penalty: {task.logic_violation_days || Math.abs(task.lag || 0)} days.</span>
                   </div>
                 </div>
                 

@@ -65,8 +65,11 @@ type ChartRow =
       finish: string;
       duration: number;
       delayDays: number;
+      logicViolationDays: number;
       lag: number;
       bottleneckVendor: string | null;
+      hasVendorCollision: boolean;
+      hasDependencyViolation: boolean;
       height: number;
     };
 
@@ -289,8 +292,11 @@ export const GanttChart = forwardRef<GanttChartHandle, {
             finish: task.calculated_finish!,
             duration: task.duration,
             delayDays: task.delay_days || 0,
+            logicViolationDays: task.logic_violation_days || 0,
             lag: task.lag || 0,
             bottleneckVendor: task.bottleneck_vendor,
+            hasVendorCollision: (task.delay_days || 0) > 0 && Boolean(task.bottleneck_vendor) && Boolean(task.delay_cause_task_id || task.delay_cause_task_name),
+            hasDependencyViolation: (task.logic_violation_days || 0) > 0,
             height: TASK_ROW_HEIGHT
           });
         });
@@ -895,6 +901,9 @@ export const GanttChart = forwardRef<GanttChartHandle, {
               );
             }
 
+            const hasVendorCollision = row.hasVendorCollision;
+            const hasDependencyViolation = row.hasDependencyViolation;
+
             return (
               <div
                 key={row.key}
@@ -913,16 +922,16 @@ export const GanttChart = forwardRef<GanttChartHandle, {
                     <span
                       className={clsx(
                         'text-[9px] uppercase truncate font-bold',
-                        row.delayDays > 0 ? 'text-red-400' : row.lag > 0 ? 'text-orange-400' : 'text-green-400/80'
+                        hasVendorCollision ? 'text-red-400' : hasDependencyViolation ? 'text-orange-400' : 'text-green-400/80'
                       )}
                     >
                       [{row.subcontractor}]
                     </span>
                   )}
                 </div>
-                {row.delayDays > 0 && (
-                  <span title={`Delay: ${row.delayDays} days`} className="flex-shrink-0 drop-shadow ml-1">
-                    <AlertTriangle size={12} className="text-red-500" />
+                {(hasVendorCollision || hasDependencyViolation) && (
+                  <span title={hasVendorCollision ? `Collision: ${row.delayDays} days` : `Dependency issue: ${row.logicViolationDays} days`} className="flex-shrink-0 drop-shadow ml-1">
+                    <AlertTriangle size={12} className={hasVendorCollision ? 'text-red-500' : 'text-orange-500'} />
                   </span>
                 )}
               </div>
@@ -1123,16 +1132,20 @@ export const GanttChart = forwardRef<GanttChartHandle, {
                     );
                   }
 
-                  const isDelayed = row.delayDays > 0;
+                  const isDelayed = row.hasVendorCollision;
+                  const hasDependencyViolation = row.hasDependencyViolation;
                   const customColor = row.subcontractor ? vendorColors[row.subcontractor] : null;
                   const logicStart = taskById.get(row.taskId)?.logic_start || row.start;
                   const logicStartDay = getDayOffset(logicStart);
 
                   return (
                     <div key={row.key} style={{ height: row.height }} className="border-b border-slate-700/20 relative flex items-center group">
-                      {isDelayed && (
+                      {(isDelayed || hasDependencyViolation) && (
                         <div
-                          className="absolute h-2.5 rounded-sm bg-slate-600/30 border border-slate-500 border-dashed z-0"
+                          className={clsx(
+                            'absolute h-2.5 rounded-sm border border-dashed z-0',
+                            isDelayed ? 'bg-slate-600/30 border-slate-500' : 'bg-orange-500/10 border-orange-500/60'
+                          )}
                           style={{
                             left: `${logicStartDay * dayWidth + 5}px`,
                             width: `${Math.max((startDay - logicStartDay) * dayWidth, 0)}px`
@@ -1145,10 +1158,11 @@ export const GanttChart = forwardRef<GanttChartHandle, {
                         className={clsx(
                           'absolute h-[18px] rounded shadow-lg transition-transform hover:-translate-y-0.5 cursor-pointer flex items-center px-1.5 z-10 box-border hover:brightness-110',
                           !customColor && isDelayed && 'bg-red-500/90 border border-red-400 shadow-[0_4px_12px_rgba(239,68,68,0.4)]',
+                          !customColor && !isDelayed && hasDependencyViolation && 'bg-orange-500/90 border border-orange-400 shadow-[0_4px_12px_rgba(249,115,22,0.35)]',
                           !customColor && !isDelayed && 'bg-gradient-to-r from-cyan-600 to-blue-600 border border-cyan-400/50 shadow-[0_4px_12px_rgba(8,145,178,0.3)]',
                           customColor && 'shadow-md border border-black/20',
                           customColor && isDelayed && 'border-2 border-red-500 ring-2 ring-red-500/60 ring-offset-1 ring-offset-slate-900',
-                          row.lag < 0 && 'border-2 border-orange-500 ring-2 ring-orange-400/50 shadow-[0_0_10px_rgba(249,115,22,0.6)]',
+                          hasDependencyViolation && 'border-2 border-orange-500 ring-2 ring-orange-400/50 shadow-[0_0_10px_rgba(249,115,22,0.6)]',
                           selectedTaskId === row.taskId && 'ring-2 ring-white ring-offset-1 ring-offset-slate-900 scale-105'
                         )}
                         style={{
@@ -1161,6 +1175,8 @@ export const GanttChart = forwardRef<GanttChartHandle, {
                           <span className={clsx('text-[9px] font-bold text-white drop-shadow-md truncate px-1 rounded', row.lag < 0 && 'bg-orange-600/50')}>
                             {row.lag < 0
                               ? `Overlap ${row.lag}d`
+                              : hasDependencyViolation
+                                ? `Dependency ${row.logicViolationDays}d`
                               : isDelayed
                                 ? `${row.delayDays}d Delay${row.bottleneckVendor ? ` (${row.bottleneckVendor})` : ''}`
                                 : `${row.duration}d`}

@@ -49,6 +49,23 @@ export function differenceInWorkingDays(startDateStr: string, endDateStr: string
     return count;
 }
 
+export function signedDifferenceInWorkingDays(startDateStr: string, endDateStr: string): number {
+  const start = parseISO(startDateStr);
+  const end = parseISO(endDateStr);
+  if (start.getTime() === end.getTime()) return 0;
+
+  const isForward = end > start;
+  let current = start;
+  let count = 0;
+
+  while (isForward ? current < end : current > end) {
+    if (!isWeekend(current)) count++;
+    current = addDays(current, isForward ? 1 : -1);
+  }
+
+  return isForward ? count : -count;
+}
+
 export function getFinishDateFromDuration(startDateStr: string, duration: number): string {
   return addWorkingDays(startDateStr, Math.max(duration - 1, 0));
 }
@@ -82,7 +99,11 @@ export interface EngineTask {
   calculated_start?: string; // logic_start + resource wait if any
   calculated_finish?: string; // inclusive finish date for the occupied work span
   delay_days?: number; // difference in days between logic and calculated
+  logic_violation_days?: number;
   delay_cause_task_id?: string; // Which conflicting task is holding up this vendor
+  delay_cause_task_name?: string;
+  delay_cause_project_id?: string;
+  delay_cause_project_name?: string;
 }
 
 export interface EngineDependency {
@@ -100,7 +121,7 @@ export function calculateScheduleEngine(
   
   // Track vendor busy dates globally across all projects
   // Map of vendorName -> state
-  const vendorOccupancy = new Map<string, { lastBusy: string, taskId: string }>();
+  const vendorOccupancy = new Map<string, { lastBusy: string, taskId: string, taskName: string, projectId: string, projectName: string }>();
 
   const taskMap = new Map<string, EngineTask>();
   tasks.forEach((task) =>
@@ -175,8 +196,6 @@ export function calculateScheduleEngine(
     const task = taskMap.get(currId)!;
     
     let actualStart = task.logic_start!;
-
-    // If manual_start is set, use it as the actual start date
     if (task.manual_start) {
         actualStart = task.manual_start;
     } else if (task.bottleneck_vendor) {
@@ -186,28 +205,28 @@ export function calculateScheduleEngine(
              if (parseISO(vendorAvailableDate) > parseISO(actualStart)) {
                  actualStart = vendorAvailableDate;
                  task.delay_cause_task_id = vendorState.taskId;
+                 task.delay_cause_task_name = vendorState.taskName;
+                 task.delay_cause_project_id = vendorState.projectId;
+                 task.delay_cause_project_name = vendorState.projectName;
              }
         }
     }
-
     task.calculated_start = actualStart;
-
-    // If manual_finish is set, use it; otherwise calculate from duration
-    if (task.manual_finish) {
-        task.calculated_finish = task.manual_finish;
-    } else {
-        task.calculated_finish = getFinishDateFromDuration(actualStart, task.duration);
-    }
+    task.calculated_finish = task.manual_finish || getFinishDateFromDuration(actualStart, task.duration);
     
     if (task.bottleneck_vendor) {
-        vendorOccupancy.set(task.bottleneck_vendor, { lastBusy: task.calculated_finish, taskId: task.id });
+        vendorOccupancy.set(task.bottleneck_vendor, {
+          lastBusy: task.calculated_finish,
+          taskId: task.id,
+          taskName: task.name,
+          projectId: task.project_id,
+          projectName: projectById.get(task.project_id)?.name ?? 'Unknown'
+        });
     }
     
-    if (task.calculated_start === task.logic_start) {
-      task.delay_days = 0;
-    } else {
-      task.delay_days = differenceInWorkingDays(task.logic_start!, task.calculated_start) - 1; 
-    }
+    const workingDayVariance = signedDifferenceInWorkingDays(task.logic_start!, task.calculated_start);
+    task.delay_days = workingDayVariance > 0 ? workingDayVariance : 0;
+    task.logic_violation_days = workingDayVariance < 0 ? Math.abs(workingDayVariance) : 0;
 
     const succs = successors.get(currId) || [];
     for (const succ of succs) {
