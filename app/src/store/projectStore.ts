@@ -86,6 +86,8 @@ export interface TaskUndoEntry {
     lag?: number;
     subcontractor?: string | null;
     bottleneck_vendor?: string | null;
+    manual_start?: string | null;
+    manual_finish?: string | null;
   };
 }
 
@@ -118,6 +120,58 @@ interface ProjectPhaseRow {
   phase_template_id: string | null;
   name: string;
   phase_order: number;
+}
+
+type SanitizedProjectTaskDraft = {
+  source_task_id: string | null;
+  template_id: string | null;
+  phase_template_id: string | null;
+  task_order: number;
+  scope: string;
+  subcontractor: string | null;
+  duration: number;
+  bottleneck_vendor: string | null;
+  lag: number;
+  manual_start: string | null;
+  manual_finish: string | null;
+};
+
+function sanitizeProjectTaskDrafts(tasks: ProjectTaskDraftInput[]): SanitizedProjectTaskDraft[] {
+  return tasks
+    .map((task) => ({
+      source_task_id: task.source_task_id ?? null,
+      template_id: task.template_id,
+      phase_template_id: task.phase_template_id,
+      task_order: Math.max(1, Math.trunc(task.task_order || 1)),
+      scope: task.scope.trim(),
+      subcontractor: task.subcontractor?.trim() || null,
+      duration: Math.max(1, Math.trunc(task.duration || 1)),
+      bottleneck_vendor: task.bottleneck_vendor?.trim() || null,
+      lag: Math.trunc(task.lag || 0),
+      manual_start: task.manual_start || null,
+      manual_finish: task.manual_finish || null
+    }))
+    .filter((task) => task.scope.length > 0);
+}
+
+function isManualDateColumnError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+
+  const errorRecord = error as Record<string, unknown>;
+  const message = [errorRecord.message, errorRecord.details, errorRecord.hint]
+    .filter((value): value is string => typeof value === 'string')
+    .join(' ')
+    .toLowerCase();
+
+  return (
+    (message.includes('manual_start') || message.includes('manual_finish')) &&
+    (message.includes('column') || message.includes('schema cache'))
+  );
+}
+
+function stripManualDateFields<T extends Record<string, unknown>>(record: T) {
+  const { manual_start: _manualStart, manual_finish: _manualFinish, ...rest } = record;
+  return rest;
 }
 
 function formatDbError(error: unknown, fallback: string): Error {
@@ -243,6 +297,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       const nextManualStart = updates.manual_start || null;
       if (nextManualStart !== task.manual_start) {
         normalizedUpdates.manual_start = nextManualStart;
+        entry.prev.manual_start = task.manual_start;
       }
     }
 
@@ -250,6 +305,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       const nextManualFinish = updates.manual_finish || null;
       if (nextManualFinish !== task.manual_finish) {
         normalizedUpdates.manual_finish = nextManualFinish;
+        entry.prev.manual_finish = task.manual_finish;
       }
     }
 
@@ -269,7 +325,10 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       redoStack: []
     }));
 
-    const { error } = await supabase.from('tasks').update(normalizedUpdates).eq('id', taskId);
+    let { error } = await supabase.from('tasks').update(normalizedUpdates).eq('id', taskId);
+    if (error && isManualDateColumnError(error)) {
+      ({ error } = await supabase.from('tasks').update(stripManualDateFields(normalizedUpdates)).eq('id', taskId));
+    }
     if (error) {
       console.error('Failed to sync task update to DB:', error);
     }
@@ -438,20 +497,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     if (!trimmedName) throw new Error('Project name is required.');
     if (!startDate) throw new Error('Project start date is required.');
 
-    const sanitizedTasks = tasks
-      .map((task) => ({
-        template_id: task.template_id,
-        phase_template_id: task.phase_template_id,
-        task_order: Math.max(1, Math.trunc(task.task_order || 1)),
-        scope: task.scope.trim(),
-        subcontractor: task.subcontractor?.trim() || null,
-        duration: Math.max(1, Math.trunc(task.duration || 1)),
-        bottleneck_vendor: task.bottleneck_vendor?.trim() || null,
-        lag: Math.trunc(task.lag || 0),
-        manual_start: task.manual_start || null,
-        manual_finish: task.manual_finish || null
-      }))
-      .filter((task) => task.scope.length > 0);
+    const sanitizedTasks = sanitizeProjectTaskDrafts(tasks);
 
     if (sanitizedTasks.length === 0) throw new Error('Add at least one scope before creating a project.');
 
@@ -474,7 +520,9 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     }
 
     // 2. Insert Project Phases from Templates
-    const usedPhaseIds = new Set(sanitizedTasks.map((task) => task.phase_template_id).filter(Boolean));
+    const usedPhaseIds = new Set(
+      sanitizedTasks.map((task) => task.phase_template_id).filter((phaseTemplateId): phaseTemplateId is string => Boolean(phaseTemplateId))
+    );
     const phaseInserts = phaseTemplates
       .filter((phase) => usedPhaseIds.has(phase.id))
       .map((phase) => ({
@@ -523,10 +571,17 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       };
     });
 
-    const { data: insertedTasks, error: tasksErr } = await supabase
+    let { data: insertedTasks, error: tasksErr } = await supabase
       .from('tasks')
       .insert(taskInserts)
       .select();
+
+    if (tasksErr && isManualDateColumnError(tasksErr)) {
+      ({ data: insertedTasks, error: tasksErr } = await supabase
+        .from('tasks')
+        .insert(taskInserts.map((task) => stripManualDateFields(task)))
+        .select());
+    }
 
     if (tasksErr || !insertedTasks) {
       throw formatDbError(tasksErr, 'Failed to insert project tasks.');
@@ -568,54 +623,42 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     if (!trimmedName) throw new Error('Project name is required.');
     if (!startDate) throw new Error('Project start date is required.');
 
-    const sanitizedTasks = tasks
-      .map((task) => ({
-        source_task_id: task.source_task_id ?? null,
-        template_id: task.template_id,
-        phase_template_id: task.phase_template_id,
-        task_order: Math.max(1, Math.trunc(task.task_order || 1)),
-        scope: task.scope.trim(),
-        subcontractor: task.subcontractor?.trim() || null,
-        duration: Math.max(1, Math.trunc(task.duration || 1)),
-        bottleneck_vendor: task.bottleneck_vendor?.trim() || null,
-        lag: Math.trunc(task.lag || 0),
-        manual_start: task.manual_start || null,
-        manual_finish: task.manual_finish || null
-      }))
-      .filter((task) => task.scope.length > 0);
+    const sanitizedTasks = sanitizeProjectTaskDrafts(tasks);
 
     if (sanitizedTasks.length === 0) throw new Error('Add at least one scope before saving this project.');
 
     const existingProjectTasks = existingTasks.filter((task) => task.project_id === projectId);
     const existingProjectPhases = state.projectPhases.filter((phase) => phase.project_id === projectId);
-    const projectTaskIds = existingProjectTasks.map((task) => task.id);
-    const dependencyIdsToDelete = dependencies
-      .filter(
-        (dependency) =>
-          projectTaskIds.includes(dependency.predecessor_id) || projectTaskIds.includes(dependency.successor_id)
-      )
-      .map((dependency) => dependency.id);
+    const existingProjectTaskIds = new Set(existingProjectTasks.map((task) => task.id));
+    const existingTaskById = new Map(existingProjectTasks.map((task) => [task.id, task]));
+    const existingPhaseByTemplateId = new Map(
+      existingProjectPhases
+        .filter((phase) => phase.phase_template_id)
+        .map((phase) => [phase.phase_template_id as string, phase])
+    );
+    const phaseById = new Map(phaseTemplates.map((phase) => [phase.id, phase]));
+    const usedPhaseIds = new Set(
+      sanitizedTasks.map((task) => task.phase_template_id).filter((phaseTemplateId): phaseTemplateId is string => Boolean(phaseTemplateId))
+    );
+    const retainedSourceTaskIds = new Set(
+      sanitizedTasks.map((task) => task.source_task_id).filter((taskId): taskId is string => Boolean(taskId))
+    );
 
     const projectDependencies = dependencies.filter(
       (dependency) =>
-        projectTaskIds.includes(dependency.predecessor_id) || projectTaskIds.includes(dependency.successor_id)
+        existingProjectTaskIds.has(dependency.predecessor_id) || existingProjectTaskIds.has(dependency.successor_id)
     );
 
     const projectDependencyPairs = projectDependencies
       .filter(
         (dependency) =>
-          projectTaskIds.includes(dependency.predecessor_id) && projectTaskIds.includes(dependency.successor_id)
+          existingProjectTaskIds.has(dependency.predecessor_id) && existingProjectTaskIds.has(dependency.successor_id)
       )
       .map((dependency) => ({
         predecessor_source_task_id: dependency.predecessor_id,
         successor_source_task_id: dependency.successor_id
       }));
-    let deletedDependencies = false;
-    let deletedTasks = false;
-    let deletedPhases = false;
-    let insertedPhases: ProjectPhaseRow[] = [];
-    let insertedTasks: TaskRow[] = [];
-    let insertedDependencies: DependencyRow[] = [];
+    const createdTaskIds: string[] = [];
 
     try {
       const { error: projectErr } = await supabase
@@ -625,53 +668,47 @@ export const useProjectStore = create<ProjectState>((set, get) => {
 
       if (projectErr) throw projectErr;
 
-      if (dependencyIdsToDelete.length > 0) {
-        const { error: dependencyDeleteError } = await supabase
-          .from('dependencies')
-          .delete()
-          .in('id', dependencyIdsToDelete);
-
-        if (dependencyDeleteError) throw dependencyDeleteError;
-        deletedDependencies = true;
-      }
-
-      if (projectTaskIds.length > 0) {
-        const { error: taskDeleteError } = await supabase.from('tasks').delete().in('id', projectTaskIds);
-        if (taskDeleteError) throw taskDeleteError;
-        deletedTasks = true;
-      }
-
-      const { error: phaseDeleteError } = await supabase.from('project_phases').delete().eq('project_id', projectId);
-      if (phaseDeleteError) throw phaseDeleteError;
-      deletedPhases = existingProjectPhases.length > 0;
-
-      const usedPhaseIds = new Set(sanitizedTasks.map((task) => task.phase_template_id).filter(Boolean));
-      const phaseInserts = phaseTemplates
-        .filter((phase) => usedPhaseIds.has(phase.id))
-        .map((phase) => ({
-          project_id: projectId,
-          phase_template_id: phase.id,
-          name: phase.name,
-          phase_order: phase.phase_order
-        }));
-
-      if (phaseInserts.length > 0) {
-        const { data, error: phasesErr } = await supabase.from('project_phases').insert(phaseInserts).select();
-        if (phasesErr || !data) throw phasesErr ?? new Error('Failed to rebuild project phases.');
-        insertedPhases = data as ProjectPhaseRow[];
-      }
-
       const phaseTemplateToProjectPhaseMap = new Map<string, string>();
-      insertedPhases.forEach((phase) => {
-        if (phase.phase_template_id) {
-          phaseTemplateToProjectPhaseMap.set(phase.phase_template_id, phase.id);
-        }
-      });
+      for (const phaseTemplateId of usedPhaseIds) {
+        const phaseTemplate = phaseById.get(phaseTemplateId);
+        if (!phaseTemplate) continue;
 
-      const phaseById = new Map(phaseTemplates.map((phase) => [phase.id, phase]));
-      const taskInserts = sanitizedTasks.map((task) => {
+        const existingPhase = existingPhaseByTemplateId.get(phaseTemplateId);
+        if (existingPhase) {
+          phaseTemplateToProjectPhaseMap.set(phaseTemplateId, existingPhase.id);
+          if (existingPhase.name !== phaseTemplate.name || existingPhase.phase_order !== phaseTemplate.phase_order) {
+            const { error: updatePhaseError } = await supabase
+              .from('project_phases')
+              .update({ name: phaseTemplate.name, phase_order: phaseTemplate.phase_order })
+              .eq('id', existingPhase.id);
+            if (updatePhaseError) throw updatePhaseError;
+          }
+          continue;
+        }
+
+        const { data: insertedPhase, error: insertPhaseError } = await supabase
+          .from('project_phases')
+          .insert({
+            project_id: projectId,
+            phase_template_id: phaseTemplate.id,
+            name: phaseTemplate.name,
+            phase_order: phaseTemplate.phase_order
+          })
+          .select()
+          .single();
+
+        if (insertPhaseError || !insertedPhase) {
+          throw insertPhaseError ?? new Error('Failed to save project phases.');
+        }
+
+        phaseTemplateToProjectPhaseMap.set(phaseTemplateId, insertedPhase.id);
+      }
+
+      const resolvedTaskIdBySourceTaskId = new Map<string, string>();
+
+      for (const task of sanitizedTasks) {
         const phase = task.phase_template_id ? phaseById.get(task.phase_template_id) ?? null : null;
-        return {
+        const taskPayload = {
           project_id: projectId,
           project_phase_id: task.phase_template_id ? phaseTemplateToProjectPhaseMap.get(task.phase_template_id) ?? null : null,
           template_id: task.template_id,
@@ -682,91 +719,139 @@ export const useProjectStore = create<ProjectState>((set, get) => {
           subcontractor: task.subcontractor,
           bottleneck_vendor: task.bottleneck_vendor,
           duration: task.duration,
-          lag: task.lag ?? 0
+          lag: task.lag,
+          manual_start: task.manual_start,
+          manual_finish: task.manual_finish
         };
-      });
 
-      const { data: insertedTaskData, error: insertTasksError } = await supabase.from('tasks').insert(taskInserts).select();
-      if (insertTasksError || !insertedTaskData) {
-        throw insertTasksError ?? new Error('Failed to save project tasks.');
-      }
-      insertedTasks = insertedTaskData as TaskRow[];
-
-      const newTaskIdBySourceTaskId = new Map<string, string>();
-      sanitizedTasks.forEach((task, index) => {
         if (task.source_task_id) {
-          newTaskIdBySourceTaskId.set(task.source_task_id, insertedTasks[index].id);
-        }
-      });
+          const existingTask = existingTaskById.get(task.source_task_id);
+          if (!existingTask) {
+            throw new Error('A project task could not be matched during save.');
+          }
 
-      const dependencyInserts = projectDependencyPairs
-        .map((dependency) => ({
-          predecessor_id: newTaskIdBySourceTaskId.get(dependency.predecessor_source_task_id) ?? null,
-          successor_id: newTaskIdBySourceTaskId.get(dependency.successor_source_task_id) ?? null
-        }))
-        .filter(
-          (dependency): dependency is { predecessor_id: string; successor_id: string } =>
-            Boolean(dependency.predecessor_id && dependency.successor_id)
-        );
+          resolvedTaskIdBySourceTaskId.set(task.source_task_id, existingTask.id);
+
+          const hasChanges =
+            existingTask.project_phase_id !== taskPayload.project_phase_id ||
+            existingTask.template_id !== taskPayload.template_id ||
+            existingTask.name !== taskPayload.name ||
+            existingTask.phase_name !== taskPayload.phase_name ||
+            (existingTask.phase_order ?? 0) !== taskPayload.phase_order ||
+            (existingTask.task_order ?? 0) !== taskPayload.task_order ||
+            existingTask.subcontractor !== taskPayload.subcontractor ||
+            existingTask.bottleneck_vendor !== taskPayload.bottleneck_vendor ||
+            (existingTask.duration ?? 1) !== taskPayload.duration ||
+            (existingTask.lag ?? 0) !== taskPayload.lag ||
+            (existingTask.manual_start ?? null) !== taskPayload.manual_start ||
+            (existingTask.manual_finish ?? null) !== taskPayload.manual_finish;
+
+          if (!hasChanges) continue;
+
+          let { error: updateTaskError } = await supabase.from('tasks').update(taskPayload).eq('id', existingTask.id);
+          if (updateTaskError && isManualDateColumnError(updateTaskError)) {
+            ({ error: updateTaskError } = await supabase
+              .from('tasks')
+              .update(stripManualDateFields(taskPayload))
+              .eq('id', existingTask.id));
+          }
+          if (updateTaskError) throw updateTaskError;
+          continue;
+        }
+
+        let { data: insertedTask, error: insertTaskError } = await supabase
+          .from('tasks')
+          .insert(taskPayload)
+          .select()
+          .single();
+
+        if (insertTaskError && isManualDateColumnError(insertTaskError)) {
+          ({ data: insertedTask, error: insertTaskError } = await supabase
+            .from('tasks')
+            .insert(stripManualDateFields(taskPayload))
+            .select()
+            .single());
+        }
+
+        if (insertTaskError || !insertedTask) {
+          throw insertTaskError ?? new Error('Failed to save project tasks.');
+        }
+
+        createdTaskIds.push(insertedTask.id);
+      }
+
+      const desiredDependencyKeys = new Set<string>(
+        projectDependencyPairs
+          .map((dependency) => {
+            const predecessorId = resolvedTaskIdBySourceTaskId.get(dependency.predecessor_source_task_id);
+            const successorId = resolvedTaskIdBySourceTaskId.get(dependency.successor_source_task_id);
+            if (!predecessorId || !successorId) return null;
+            return `${predecessorId}->${successorId}`;
+          })
+          .filter((key): key is string => Boolean(key))
+      );
+
+      const existingDependencyByKey = new Map<string, EngineDependency>(
+        projectDependencies
+          .filter(
+            (dependency) =>
+              retainedSourceTaskIds.has(dependency.predecessor_id) &&
+              retainedSourceTaskIds.has(dependency.successor_id)
+          )
+          .map((dependency) => [`${dependency.predecessor_id}->${dependency.successor_id}`, dependency] as const)
+      );
+
+      const dependencyIdsToDelete = projectDependencies
+        .filter((dependency) => {
+          const key = `${dependency.predecessor_id}->${dependency.successor_id}`;
+          return !desiredDependencyKeys.has(key);
+        })
+        .map((dependency) => dependency.id);
+
+      if (dependencyIdsToDelete.length > 0) {
+        const { error: deleteDependenciesError } = await supabase.from('dependencies').delete().in('id', dependencyIdsToDelete);
+        if (deleteDependenciesError) throw deleteDependenciesError;
+      }
+
+      const dependencyInserts = Array.from(desiredDependencyKeys)
+        .filter((key) => !existingDependencyByKey.has(key))
+        .map((key) => {
+          const [predecessor_id, successor_id] = key.split('->');
+          return { predecessor_id, successor_id };
+        });
 
       if (dependencyInserts.length > 0) {
-        const { data: insertedDependencyData, error: dependencyInsertError } = await supabase
-          .from('dependencies')
-          .insert(dependencyInserts)
-          .select();
-        if (dependencyInsertError || !insertedDependencyData) {
-          throw dependencyInsertError ?? new Error('Failed to rebuild project dependencies.');
-        }
-        insertedDependencies = insertedDependencyData as DependencyRow[];
+        const { error: insertDependenciesError } = await supabase.from('dependencies').insert(dependencyInserts);
+        if (insertDependenciesError) throw insertDependenciesError;
+      }
+
+      const taskIdsToDelete = existingProjectTasks
+        .filter((task) => !retainedSourceTaskIds.has(task.id))
+        .map((task) => task.id);
+
+      if (taskIdsToDelete.length > 0) {
+        const { error: deleteTasksError } = await supabase.from('tasks').delete().in('id', taskIdsToDelete);
+        if (deleteTasksError) throw deleteTasksError;
+      }
+
+      const phaseIdsToDelete = existingProjectPhases
+        .filter((phase) => !phase.phase_template_id || !usedPhaseIds.has(phase.phase_template_id))
+        .map((phase) => phase.id);
+
+      if (phaseIdsToDelete.length > 0) {
+        const { error: deletePhasesError } = await supabase.from('project_phases').delete().in('id', phaseIdsToDelete);
+        if (deletePhasesError) throw deletePhasesError;
       }
 
       await get().fetchData();
     } catch (error) {
-      console.error('Failed to update project draft. Attempting rollback.', error);
-
-      if (insertedDependencies.length > 0) {
-        await supabase.from('dependencies').delete().in('id', insertedDependencies.map((dependency) => dependency.id));
-      }
-
-      if (insertedTasks.length > 0) {
-        await supabase.from('tasks').delete().in('id', insertedTasks.map((task) => task.id));
-      }
-
-      if (insertedPhases.length > 0) {
-        await supabase.from('project_phases').delete().in('id', insertedPhases.map((phase) => phase.id));
-      }
-
-      if (deletedPhases && existingProjectPhases.length > 0) {
-        const { error: restorePhasesError } = await supabase.from('project_phases').insert(existingProjectPhases);
-        if (restorePhasesError) {
-          console.error('Failed to restore original project phases after update error:', restorePhasesError);
-        }
-      }
-
-      if (deletedTasks && existingProjectTasks.length > 0) {
-        const { error: restoreTasksError } = await supabase.from('tasks').insert(existingProjectTasks);
-        if (restoreTasksError) {
-          console.error('Failed to restore original project tasks after update error:', restoreTasksError);
-        }
-      }
-
-      if (deletedDependencies && projectDependencies.length > 0) {
-        const { error: restoreDependenciesError } = await supabase.from('dependencies').insert(projectDependencies);
-        if (restoreDependenciesError) {
-          console.error('Failed to restore original project dependencies after update error:', restoreDependenciesError);
-        }
-      }
-
-      const { error: restoreProjectError } = await supabase
-        .from('projects')
-        .update({ name: existingProject.name, start_date: existingProject.start_date })
-        .eq('id', projectId);
-      if (restoreProjectError) {
-        console.error('Failed to restore original project metadata after update error:', restoreProjectError);
-      }
-
+      console.error('Failed to update project draft.', error);
       await get().fetchData();
-      throw new Error('Failed to update project. Original project data was restored.');
+      throw new Error(
+        createdTaskIds.length > 0
+          ? 'Failed to update project before removing existing data. Any newly added scopes may need cleanup, but the original project was left in place.'
+          : 'Failed to update project without deleting the existing project data.'
+      );
     }
   },
 
