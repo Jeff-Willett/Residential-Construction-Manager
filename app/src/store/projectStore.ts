@@ -197,8 +197,10 @@ function isMissingSubcontractorsTableError(error: unknown): boolean {
 }
 
 function stripManualDateFields<T extends Record<string, unknown>>(record: T) {
-  const { manual_start: _manualStart, manual_finish: _manualFinish, ...rest } = record;
-  return rest;
+  const sanitizedRecord = { ...record };
+  delete sanitizedRecord.manual_start;
+  delete sanitizedRecord.manual_finish;
+  return sanitizedRecord;
 }
 
 function collectReferencedSubcontractors(input: {

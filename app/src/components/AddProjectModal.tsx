@@ -379,7 +379,10 @@ export function AddProjectModal(props: AddProjectModalProps) {
     setError(null);
 
     try {
-      const sanitizedDrafts = taskDrafts.map(({ localId: _localId, ...draft }) => draft);
+      const sanitizedDrafts = taskDrafts.map(({ localId, ...draft }) => {
+        void localId;
+        return draft;
+      });
       if (isEditMode && projectId) {
         await updateProjectFromDraft({
           projectId,

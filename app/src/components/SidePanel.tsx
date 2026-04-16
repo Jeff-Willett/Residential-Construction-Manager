@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useProjectStore } from '../store/projectStore';
 import { getFinishDateFromDuration, type EngineTask } from '../utils/schedulingEngine';
 import { X, Clock, CalendarDays, AlertTriangle } from 'lucide-react';
@@ -44,23 +44,6 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
     subcontractors.map((subcontractor) => subcontractor.name),
     [...tasks.map((candidate) => candidate.subcontractor), task.subcontractor]
   );
-
-  useEffect(() => {
-    setDurationInput(task.duration.toString());
-    setVendorInput(task.subcontractor || '');
-    setIsResourceConstrained(Boolean(task.bottleneck_vendor));
-    setStartDateStr(task.manual_start || task.calculated_start || '');
-    setFinishDateStr(task.manual_finish || task.calculated_finish || '');
-  }, [
-    task.id,
-    task.duration,
-    task.subcontractor,
-    task.bottleneck_vendor,
-    task.manual_start,
-    task.manual_finish,
-    task.calculated_start,
-    task.calculated_finish
-  ]);
 
   const handleDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       const dur = parseInt(e.target.value, 10);

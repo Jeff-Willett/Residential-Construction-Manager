@@ -136,8 +136,9 @@ jobs:
       - run: npm ci
       - name: Run tests (if configured)
         run: |
-          if npm run test --if-present 2>&1 | grep -q "Missing script"; then
+          if node -e "process.exit(require('./package.json').scripts?.test ? 0 : 1)"; then
+            npm test
+          else
             echo "No test suite configured yet. Add Vitest regression tests (Phase 4) to enforce this check."
             exit 0
           fi
-          npm test

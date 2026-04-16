@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useProjectStore, type ActiveFilters } from './store/projectStore';
 import { GanttChart, type GanttChartHandle } from './components/GanttChart';
 import { SidePanel } from './components/SidePanel';
@@ -143,7 +143,11 @@ function App() {
   const [templateStudioInitialTab, setTemplateStudioInitialTab] = useState<TemplateStudioTab>('overview');
   const [zoomControls, setZoomControls] = useState({ canZoomIn: false, canZoomOut: true });
   const [chartResetKey, setChartResetKey] = useState(0);
-  const [hasHydratedUrlState, setHasHydratedUrlState] = useState(false);
+  const hasInitialUrlFilters =
+    initialUrlViewState.filters.projects.length > 0 ||
+    initialUrlViewState.filters.vendors.length > 0 ||
+    initialUrlViewState.filters.scopes.length > 0;
+  const [hasHydratedUrlState, setHasHydratedUrlState] = useState(!hasInitialUrlFilters);
   const ganttChartRef = useRef<GanttChartHandle>(null);
   const environmentLabel = getEnvironmentLabel();
 
@@ -154,48 +158,44 @@ function App() {
   }, [fetchData]);
 
   useEffect(() => {
+    if (!hasInitialUrlFilters) return;
+
     setActiveFilters(initialUrlViewState.filters);
-    setHasHydratedUrlState(true);
-  }, [initialUrlViewState.filters, setActiveFilters]);
+    const hydrationTimer = window.setTimeout(() => setHasHydratedUrlState(true), 0);
+
+    return () => window.clearTimeout(hydrationTimer);
+  }, [hasInitialUrlFilters, initialUrlViewState.filters, setActiveFilters]);
+
+  const validSelectedTaskId = useMemo(
+    () => (selectedTaskId && tasks.some((task) => task.id === selectedTaskId) ? selectedTaskId : null),
+    [selectedTaskId, tasks]
+  );
+  const validEditingProjectId = useMemo(
+    () => (editingProjectId && projects.some((project) => project.id === editingProjectId) ? editingProjectId : null),
+    [editingProjectId, projects]
+  );
+  const effectiveOpenModal = useMemo<ViewModal | null>(() => {
+    if (openModal === 'edit-project' && !validEditingProjectId) {
+      return null;
+    }
+    return openModal;
+  }, [openModal, validEditingProjectId]);
 
   useEffect(() => {
     if (!hasHydratedUrlState) return;
 
     writeUrlViewState({
-      selectedTaskId,
-      editingProjectId,
-      modal: openModal,
+      selectedTaskId: validSelectedTaskId,
+      editingProjectId: validEditingProjectId,
+      modal: effectiveOpenModal,
       filters: activeFilters
     });
-  }, [activeFilters, editingProjectId, hasHydratedUrlState, openModal, selectedTaskId]);
+  }, [activeFilters, effectiveOpenModal, hasHydratedUrlState, validEditingProjectId, validSelectedTaskId]);
 
-  useEffect(() => {
-    if (isLoading) return;
-
-    if (selectedTaskId && !tasks.some((task) => task.id === selectedTaskId)) {
-      setSelectedTaskId(null);
-    }
-  }, [isLoading, selectedTaskId, tasks]);
-
-  useEffect(() => {
-    if (isLoading) return;
-
-    if (editingProjectId && !projects.some((project) => project.id === editingProjectId)) {
-      setEditingProjectId(null);
-      setOpenModal((current) => (current === 'edit-project' ? null : current));
-    }
-  }, [editingProjectId, isLoading, projects]);
-
-  useEffect(() => {
-    if (openModal === 'edit-project' && !editingProjectId) {
-      setOpenModal(null);
-    }
-  }, [editingProjectId, openModal]);
-
-  const selectedTask = selectedTaskId ? tasks.find((task) => task.id === selectedTaskId) : undefined;
-  const isFilterOpen = openModal === 'filter';
-  const isTemplateStudioOpen = openModal === 'template';
-  const isAddProjectOpen = openModal === 'add-project';
+  const selectedTask = validSelectedTaskId ? tasks.find((task) => task.id === validSelectedTaskId) : undefined;
+  const isFilterOpen = effectiveOpenModal === 'filter';
+  const isTemplateStudioOpen = effectiveOpenModal === 'template';
+  const isAddProjectOpen = effectiveOpenModal === 'add-project';
 
   const resetToHomeView = () => {
     setSelectedTaskId(null);
@@ -341,7 +341,7 @@ function App() {
                   setEditingProjectId(projectId);
                   setOpenModal('edit-project');
                 }}
-                selectedTaskId={selectedTaskId}
+                selectedTaskId={validSelectedTaskId}
                 onZoomStateChange={setZoomControls}
               />
             )}
@@ -352,7 +352,16 @@ function App() {
       {/* Side Panel */}
       {selectedTask && (
         <SidePanel 
-          key={selectedTask.id}
+          key={[
+            selectedTask.id,
+            selectedTask.duration,
+            selectedTask.subcontractor ?? '',
+            selectedTask.bottleneck_vendor ?? '',
+            selectedTask.manual_start ?? '',
+            selectedTask.manual_finish ?? '',
+            selectedTask.calculated_start ?? '',
+            selectedTask.calculated_finish ?? ''
+          ].join(':')}
           task={selectedTask} 
           onClose={() => setSelectedTaskId(null)} 
         />
@@ -378,10 +387,10 @@ function App() {
         <AddProjectModal onClose={() => setOpenModal(null)} />
       )}
 
-      {openModal === 'edit-project' && editingProjectId && (
+      {effectiveOpenModal === 'edit-project' && validEditingProjectId && (
         <AddProjectModal
           mode="edit"
-          projectId={editingProjectId}
+          projectId={validEditingProjectId}
           onClose={() => {
             setEditingProjectId(null);
             setOpenModal(null);
