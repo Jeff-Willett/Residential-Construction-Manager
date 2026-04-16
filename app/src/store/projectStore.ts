@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { calculateScheduleEngine, type Project, type EngineTask, type EngineDependency } from '../utils/schedulingEngine';
 import { supabase } from '../lib/supabase';
+import { normalizeSubcontractorName } from '../utils/subcontractors';
 
 export interface TaskTemplate {
   id: string;
@@ -32,6 +33,19 @@ export interface TemplateDependency {
   id: string;
   predecessor_id: string;
   successor_id: string;
+}
+
+export interface Subcontractor {
+  id: string;
+  name: string;
+}
+
+function buildDerivedSubcontractorId(name: string) {
+  return `derived:${name.toLocaleLowerCase()}`;
+}
+
+function isDerivedSubcontractorId(id: string) {
+  return id.startsWith('derived:');
 }
 
 export interface PhaseTemplateInput {
@@ -170,9 +184,58 @@ function isManualDateColumnError(error: unknown): boolean {
   );
 }
 
+function isMissingSubcontractorsTableError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+
+  const errorRecord = error as Record<string, unknown>;
+  const message = [errorRecord.message, errorRecord.details, errorRecord.hint]
+    .filter((value): value is string => typeof value === 'string')
+    .join(' ')
+    .toLowerCase();
+
+  return message.includes('subcontractors') && (message.includes('does not exist') || message.includes('schema cache'));
+}
+
 function stripManualDateFields<T extends Record<string, unknown>>(record: T) {
-  const { manual_start: _manualStart, manual_finish: _manualFinish, ...rest } = record;
-  return rest;
+  const sanitizedRecord = { ...record };
+  delete sanitizedRecord.manual_start;
+  delete sanitizedRecord.manual_finish;
+  return sanitizedRecord;
+}
+
+function collectReferencedSubcontractors(input: {
+  templates: Array<{ subcontractor: string | null }>;
+  tasks: Array<{ subcontractor: string | null }>;
+  vendorColors: Record<string, string>;
+  managed?: Subcontractor[];
+}) {
+  const names = new Set<string>();
+
+  input.managed?.forEach((subcontractor) => {
+    const normalized = normalizeSubcontractorName(subcontractor.name);
+    if (normalized) names.add(normalized);
+  });
+
+  input.templates.forEach((template) => {
+    const normalized = normalizeSubcontractorName(template.subcontractor);
+    if (normalized) names.add(normalized);
+  });
+
+  input.tasks.forEach((task) => {
+    const normalized = normalizeSubcontractorName(task.subcontractor);
+    if (normalized) names.add(normalized);
+  });
+
+  Object.keys(input.vendorColors).forEach((vendor) => {
+    const normalized = normalizeSubcontractorName(vendor);
+    if (normalized) names.add(normalized);
+  });
+
+  const managedByName = new Map((input.managed ?? []).map((subcontractor) => [subcontractor.name, subcontractor]));
+
+  return Array.from(names)
+    .sort((left, right) => left.localeCompare(right))
+    .map((name) => managedByName.get(name) ?? { id: buildDerivedSubcontractorId(name), name });
 }
 
 function formatDbError(error: unknown, fallback: string): Error {
@@ -249,6 +312,7 @@ interface ProjectState {
   projectPhases: ProjectPhase[];
   templates: TaskTemplate[];
   templateDependencies: TemplateDependency[];
+  subcontractors: Subcontractor[];
   isLoading: boolean;
   error: string | null;
   vendorColors: Record<string, string>;
@@ -266,6 +330,9 @@ interface ProjectState {
   createTaskTemplate: (input: TaskTemplateInput) => Promise<void>;
   updateTaskTemplate: (templateId: string, updates: Partial<TaskTemplateInput>) => Promise<void>;
   deleteTaskTemplate: (templateId: string) => Promise<void>;
+  createSubcontractor: (name: string) => Promise<void>;
+  updateSubcontractor: (subcontractorId: string, name: string) => Promise<void>;
+  deleteSubcontractor: (subcontractorId: string) => Promise<void>;
   addTemplateDependency: (predecessorId: string, successorId: string) => Promise<void>;
   removeTemplateDependency: (dependencyId: string) => Promise<void>;
   updateTaskFields: (
@@ -393,6 +460,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       projectPhases: [],
       templates: [],
       templateDependencies: [],
+      subcontractors: [],
       isLoading: true,
       error: null,
       vendorColors: {},
@@ -444,6 +512,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         { data: projectPhasesData, error: projectPhasesErr },
         { data: tempData, error: tempErr },
         { data: tempDepsData, error: tempDepsErr },
+        { data: subcontractorsData, error: subcontractorsErr },
         { data: vendorColorsData, error: vendorColorsErr }
       ] = await Promise.all([
         supabase.from('projects').select('*').order('start_date', { ascending: true }),
@@ -453,6 +522,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         supabase.from('project_phases').select('*').order('phase_order', { ascending: true }),
         supabase.from('task_templates').select('*').order('task_order', { ascending: true }),
         supabase.from('template_dependencies').select('*'),
+        supabase.from('subcontractors').select('*').order('name', { ascending: true }),
         supabase.from('vendor_colors').select('*')
       ]);
 
@@ -463,6 +533,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       if (projectPhasesErr) throw projectPhasesErr;
       if (tempErr) throw tempErr;
       if (tempDepsErr) throw tempDepsErr;
+      if (subcontractorsErr && !isMissingSubcontractorsTableError(subcontractorsErr)) throw subcontractorsErr;
       if (vendorColorsErr) console.error('Failed to fetch vendor colors:', vendorColorsErr);
 
       const computedColors: Record<string, string> = {};
@@ -477,6 +548,10 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       const projectPhases = projectPhasesData || [];
       const templates = tempData || [];
       const templateDependencies = tempDepsData || [];
+      const managedSubcontractors = ((subcontractorsData as Array<{ id: string; name: string }> | null) || []).map((entry) => ({
+        id: entry.id,
+        name: entry.name
+      }));
 
       const fetchedTasks: EngineTask[] = ((tasksData as TaskRow[] | null) || []).map((t) => ({
         id: t.id,
@@ -502,6 +577,13 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         follow_predecessor_changes: d.follow_predecessor_changes ?? true
       }));
 
+      const subcontractors = collectReferencedSubcontractors({
+        templates,
+        tasks: fetchedTasks,
+        vendorColors: computedColors,
+        managed: managedSubcontractors
+      });
+
       // Apply Engine Logic
       const recalculated = calculateScheduleEngine(projects, fetchedTasks, fetchedDeps);
 
@@ -525,6 +607,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         projectPhases,
         templates, 
         templateDependencies,
+        subcontractors,
         vendorColors: computedColors,
         isLoading: false 
       });
@@ -1142,6 +1225,139 @@ export const useProjectStore = create<ProjectState>((set, get) => {
   deleteTaskTemplate: async (templateId: string) => {
     const { error } = await supabase.from('task_templates').delete().eq('id', templateId);
     if (error) throw error;
+
+    await get().fetchData();
+  },
+
+  createSubcontractor: async (name: string) => {
+    const trimmedName = normalizeSubcontractorName(name);
+    if (!trimmedName) throw new Error('Subcontractor name is required.');
+
+    const duplicate = get().subcontractors.find(
+      (subcontractor) => subcontractor.name.toLocaleLowerCase() === trimmedName.toLocaleLowerCase()
+    );
+    if (duplicate) throw new Error('That subcontractor already exists.');
+
+    const { error } = await supabase.from('subcontractors').insert({
+      id: crypto.randomUUID(),
+      name: trimmedName
+    });
+
+    if (error) throw error;
+
+    await get().fetchData();
+  },
+
+  updateSubcontractor: async (subcontractorId: string, name: string) => {
+    const state = get();
+    const existing = state.subcontractors.find((entry) => entry.id === subcontractorId);
+    if (!existing) throw new Error('Subcontractor not found.');
+
+    const trimmedName = normalizeSubcontractorName(name);
+    if (!trimmedName) throw new Error('Subcontractor name is required.');
+
+    const duplicate = state.subcontractors.find(
+      (subcontractor) =>
+        subcontractor.id !== subcontractorId &&
+        subcontractor.name.toLocaleLowerCase() === trimmedName.toLocaleLowerCase()
+    );
+    if (duplicate) throw new Error('That subcontractor already exists.');
+
+    if (trimmedName === existing.name) return;
+
+    const previousColor = state.vendorColors[existing.name] || '';
+    const isDerived = isDerivedSubcontractorId(subcontractorId);
+
+    set((current) => {
+      const nextVendorColors = { ...current.vendorColors };
+      if (existing.name in nextVendorColors) {
+        delete nextVendorColors[existing.name];
+      }
+      if (previousColor) {
+        nextVendorColors[trimmedName] = previousColor;
+      }
+
+      return {
+        subcontractors: current.subcontractors.map((subcontractor) =>
+          subcontractor.id === subcontractorId ? { ...subcontractor, name: trimmedName } : subcontractor
+        ),
+        templates: current.templates.map((template) => ({
+          ...template,
+          subcontractor: template.subcontractor === existing.name ? trimmedName : template.subcontractor,
+          bottleneck_vendor: template.bottleneck_vendor === existing.name ? trimmedName : template.bottleneck_vendor
+        })),
+        tasks: current.tasks.map((task) => ({
+          ...task,
+          subcontractor: task.subcontractor === existing.name ? trimmedName : task.subcontractor,
+          bottleneck_vendor: task.bottleneck_vendor === existing.name ? trimmedName : task.bottleneck_vendor
+        })),
+        vendorColors: nextVendorColors,
+        activeFilters: {
+          ...current.activeFilters,
+          vendors: current.activeFilters.vendors.map((vendor) => (vendor === existing.name ? trimmedName : vendor))
+        }
+      };
+    });
+
+    if (isDerived) {
+      const { error: insertSubcontractorError } = await supabase.from('subcontractors').insert({
+        id: crypto.randomUUID(),
+        name: trimmedName
+      });
+      if (insertSubcontractorError) throw insertSubcontractorError;
+    } else {
+      const { error: subcontractorError } = await supabase
+        .from('subcontractors')
+        .update({ name: trimmedName })
+        .eq('id', subcontractorId);
+      if (subcontractorError) throw subcontractorError;
+    }
+
+    const templateUpdates: PromiseLike<{ error: unknown }>[] = [
+      supabase.from('task_templates').update({ subcontractor: trimmedName }).eq('subcontractor', existing.name),
+      supabase.from('task_templates').update({ bottleneck_vendor: trimmedName }).eq('bottleneck_vendor', existing.name),
+      supabase.from('tasks').update({ subcontractor: trimmedName }).eq('subcontractor', existing.name),
+      supabase.from('tasks').update({ bottleneck_vendor: trimmedName }).eq('bottleneck_vendor', existing.name)
+    ];
+
+    const results = await Promise.all(templateUpdates);
+    const failed = results.find((result) => result.error);
+    if (failed?.error) throw failed.error;
+
+    if (previousColor) {
+      const { error: upsertColorError } = await supabase
+        .from('vendor_colors')
+        .upsert({ vendor_name: trimmedName, color: previousColor }, { onConflict: 'vendor_name' });
+      if (upsertColorError) throw upsertColorError;
+
+      const { error: deleteColorError } = await supabase.from('vendor_colors').delete().eq('vendor_name', existing.name);
+      if (deleteColorError) throw deleteColorError;
+    }
+  },
+
+  deleteSubcontractor: async (subcontractorId: string) => {
+    const state = get();
+    const subcontractor = state.subcontractors.find((entry) => entry.id === subcontractorId);
+    if (!subcontractor) throw new Error('Subcontractor not found.');
+    const isDerived = isDerivedSubcontractorId(subcontractorId);
+
+    const isReferenced =
+      state.templates.some((template) => template.subcontractor === subcontractor.name) ||
+      state.tasks.some((task) => task.subcontractor === subcontractor.name);
+
+    if (isReferenced) {
+      throw new Error('This subcontractor is still assigned to a scope and cannot be removed yet.');
+    }
+
+    if (subcontractor.name in state.vendorColors) {
+      const { error: deleteColorError } = await supabase.from('vendor_colors').delete().eq('vendor_name', subcontractor.name);
+      if (deleteColorError) throw deleteColorError;
+    }
+
+    if (!isDerived) {
+      const { error } = await supabase.from('subcontractors').delete().eq('id', subcontractorId);
+      if (error) throw error;
+    }
 
     await get().fetchData();
   },

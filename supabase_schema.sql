@@ -30,6 +30,14 @@ CREATE TABLE IF NOT EXISTS task_templates (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS subcontractors (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS subcontractors_name_lower_idx ON subcontractors (LOWER(name));
+
 CREATE TABLE IF NOT EXISTS template_dependencies (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   predecessor_id UUID REFERENCES task_templates(id) ON DELETE CASCADE,
@@ -76,6 +84,7 @@ CREATE TABLE IF NOT EXISTS vendor_colors (
 ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
 ALTER TABLE phase_templates ENABLE ROW LEVEL SECURITY;
 ALTER TABLE task_templates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE subcontractors ENABLE ROW LEVEL SECURITY;
 ALTER TABLE template_dependencies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE project_phases ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;
@@ -85,6 +94,7 @@ ALTER TABLE vendor_colors ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Enable all for all users" ON projects FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Enable all for all users" ON phase_templates FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Enable all for all users" ON task_templates FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Enable all for all users" ON subcontractors FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Enable all for all users" ON template_dependencies FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Enable all for all users" ON project_phases FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Enable all for all users" ON tasks FOR ALL USING (true) WITH CHECK (true);

@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useProjectStore } from '../store/projectStore';
 import { getFinishDateFromDuration, type EngineTask } from '../utils/schedulingEngine';
 import { X, Clock, CalendarDays, AlertTriangle } from 'lucide-react';
 import { format, parseISO, isWeekend, addDays } from 'date-fns';
+import { buildSubcontractorOptions } from '../utils/subcontractors';
 
 function getWorkingDaysDiff(startStr: string, endStr: string): number {
     const start = parseISO(startStr);
@@ -29,7 +30,8 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
     updateDependencyFollowSetting,
     projects,
     tasks,
-    dependencies
+    dependencies,
+    subcontractors
   } = useProjectStore();
   
   const [durationInput, setDurationInput] = useState(task.duration.toString());
@@ -38,25 +40,10 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
   const [startDateStr, setStartDateStr] = useState(task.manual_start || task.calculated_start || '');
   const [finishDateStr, setFinishDateStr] = useState(task.manual_finish || task.calculated_finish || '');
 
-  const uniqueVendors = Array.from(new Set(tasks.map(t => t.subcontractor).filter(Boolean))) as string[];
-  uniqueVendors.sort();
-
-  useEffect(() => {
-    setDurationInput(task.duration.toString());
-    setVendorInput(task.subcontractor || '');
-    setIsResourceConstrained(Boolean(task.bottleneck_vendor));
-    setStartDateStr(task.manual_start || task.calculated_start || '');
-    setFinishDateStr(task.manual_finish || task.calculated_finish || '');
-  }, [
-    task.id,
-    task.duration,
-    task.subcontractor,
-    task.bottleneck_vendor,
-    task.manual_start,
-    task.manual_finish,
-    task.calculated_start,
-    task.calculated_finish
-  ]);
+  const uniqueVendors = buildSubcontractorOptions(
+    subcontractors.map((subcontractor) => subcontractor.name),
+    [...tasks.map((candidate) => candidate.subcontractor), task.subcontractor]
+  );
 
   const handleDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       const dur = parseInt(e.target.value, 10);

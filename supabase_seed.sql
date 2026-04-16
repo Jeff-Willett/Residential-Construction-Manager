@@ -7,6 +7,7 @@
 DROP TABLE IF EXISTS dependencies CASCADE;
 DROP TABLE IF EXISTS tasks CASCADE;
 DROP TABLE IF EXISTS template_dependencies CASCADE;
+DROP TABLE IF EXISTS subcontractors CASCADE;
 DROP TABLE IF EXISTS task_templates CASCADE;
 DROP TABLE IF EXISTS projects CASCADE;
 DROP TABLE IF EXISTS vendor_colors CASCADE;
@@ -28,6 +29,14 @@ CREATE TABLE task_templates (
   bottleneck_vendor TEXT,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+CREATE TABLE subcontractors (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX subcontractors_name_lower_idx ON subcontractors (LOWER(name));
 
 CREATE TABLE template_dependencies (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -61,6 +70,7 @@ CREATE TABLE vendor_colors (
 
 ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
 ALTER TABLE task_templates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE subcontractors ENABLE ROW LEVEL SECURITY;
 ALTER TABLE template_dependencies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE dependencies ENABLE ROW LEVEL SECURITY;
@@ -68,6 +78,7 @@ ALTER TABLE vendor_colors ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Enable all for all users" ON projects FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Enable all for all users" ON task_templates FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Enable all for all users" ON subcontractors FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Enable all for all users" ON template_dependencies FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Enable all for all users" ON tasks FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Enable all for all users" ON dependencies FOR ALL USING (true) WITH CHECK (true);
@@ -120,6 +131,11 @@ INSERT INTO task_templates (id, task_order, scope, subcontractor, default_days, 
 ('aaaa0000-0000-4000-8000-000000000042', 42, 'Insulation Ceiling', 'Tyler Champion', 2, NULL),
 ('aaaa0000-0000-4000-8000-000000000043', 43, 'Painting Finish', 'L&L Painting', 5, NULL),
 ('aaaa0000-0000-4000-8000-000000000044', 44, 'Cleaning', 'Angies Cleaning', 3, NULL);
+
+INSERT INTO subcontractors (name)
+SELECT DISTINCT subcontractor
+FROM task_templates
+WHERE subcontractor IS NOT NULL AND subcontractor <> '';
 
 -- FULL 44-TASK DEPENDENCY MAPPING FROM SPREADSHEET
 INSERT INTO template_dependencies (predecessor_id, successor_id) VALUES

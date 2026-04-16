@@ -259,10 +259,10 @@ export const GanttChart = forwardRef<GanttChartHandle, {
   const [persistedViewState] = useState(readPersistedChartViewState);
   const [zoomLevel, setZoomLevel] = useState<ZoomLevel>(persistedViewState.zoomLevel);
   const [leftPanelWidth, setLeftPanelWidth] = useState(persistedViewState.leftPanelWidth);
-  const [visibleProjectPhases, setVisibleProjectPhases] = useState<Record<string, boolean>>(persistedViewState.visibleProjectPhases);
+  const [storedVisibleProjectPhases, setVisibleProjectPhases] = useState<Record<string, boolean>>(persistedViewState.visibleProjectPhases);
   const [expandedPhases, setExpandedPhases] = useState<Record<string, boolean>>(persistedViewState.expandedPhases);
-  const [hiddenProjectBars, setHiddenProjectBars] = useState<Record<string, boolean>>(persistedViewState.hiddenProjectBars);
-  const [hiddenPhaseBars, setHiddenPhaseBars] = useState<Record<string, boolean>>(persistedViewState.hiddenPhaseBars);
+  const [storedHiddenProjectBars, setHiddenProjectBars] = useState<Record<string, boolean>>(persistedViewState.hiddenProjectBars);
+  const [storedHiddenPhaseBars, setHiddenPhaseBars] = useState<Record<string, boolean>>(persistedViewState.hiddenPhaseBars);
   const [scrollTop, setScrollTop] = useState(persistedViewState.scrollTop);
   const [scrollLeft, setScrollLeft] = useState(persistedViewState.scrollLeft);
 
@@ -287,6 +287,32 @@ export const GanttChart = forwardRef<GanttChartHandle, {
   }, [tasks, activeFilters]);
 
   const taskById = useMemo(() => new Map<string, EngineTask>(visibleTasks.map((task) => [task.id, task])), [visibleTasks]);
+
+  const allProjectIds = useMemo(() => projects.map((project) => project.id), [projects]);
+  const allPersistablePhaseIds = useMemo(() => {
+    const persistedIds = new Set(projectPhases.map((phase) => phase.id));
+
+    tasks.forEach((task) => {
+      const fallbackPhaseId = task.project_phase_id ?? `${task.project_id}:${task.phase_order}:${task.phase_name ?? 'Unphased'}`;
+      persistedIds.add(fallbackPhaseId);
+    });
+
+    return Array.from(persistedIds);
+  }, [projectPhases, tasks]);
+  const validProjectIds = useMemo(() => new Set(allProjectIds), [allProjectIds]);
+  const validPhaseIds = useMemo(() => new Set(allPersistablePhaseIds), [allPersistablePhaseIds]);
+  const visibleProjectPhases = useMemo(
+    () => Object.fromEntries(Object.entries(storedVisibleProjectPhases).filter(([projectId]) => validProjectIds.has(projectId))),
+    [storedVisibleProjectPhases, validProjectIds]
+  );
+  const hiddenProjectBars = useMemo(
+    () => Object.fromEntries(Object.entries(storedHiddenProjectBars).filter(([projectId]) => validProjectIds.has(projectId))),
+    [storedHiddenProjectBars, validProjectIds]
+  );
+  const hiddenPhaseBars = useMemo(
+    () => Object.fromEntries(Object.entries(storedHiddenPhaseBars).filter(([phaseId]) => validPhaseIds.has(phaseId))),
+    [storedHiddenPhaseBars, validPhaseIds]
+  );
 
   const chartMeta = useMemo(() => {
     const rows: ChartRow[] = [];
@@ -429,30 +455,24 @@ export const GanttChart = forwardRef<GanttChartHandle, {
   const { chartRows, phaseIdsByProject, projectHasCollapsedPhase, projectShowsPhases } = chartMeta;
   const allPhaseIds = useMemo(() => Array.from(phaseIdsByProject.values()).flat(), [phaseIdsByProject]);
   const visibleProjectIds = useMemo(() => Array.from(phaseIdsByProject.keys()), [phaseIdsByProject]);
-  const allProjectIds = useMemo(() => projects.map((project) => project.id), [projects]);
-  const allPersistablePhaseIds = useMemo(() => {
-    const persistedIds = new Set(projectPhases.map((phase) => phase.id));
-
-    tasks.forEach((task) => {
-      const fallbackPhaseId = task.project_phase_id ?? `${task.project_id}:${task.phase_order}:${task.phase_name ?? 'Unphased'}`;
-      persistedIds.add(fallbackPhaseId);
-    });
-
-    return Array.from(persistedIds);
-  }, [projectPhases, tasks]);
-  const rowMetrics = useMemo<RowMetric[]>(() => {
-    let offsetTop = 0;
-
-    return chartRows.map((row) => {
-      const metric: RowMetric = {
-        row,
-        top: offsetTop,
-        bottom: offsetTop + row.height
-      };
-      offsetTop += row.height;
-      return metric;
-    });
-  }, [chartRows]);
+  const rowMetrics = useMemo<RowMetric[]>(
+    () =>
+      chartRows.reduce<{ metrics: RowMetric[]; offsetTop: number }>(
+        (accumulator, row) => {
+          accumulator.metrics.push({
+            row,
+            top: accumulator.offsetTop,
+            bottom: accumulator.offsetTop + row.height
+          });
+          return {
+            metrics: accumulator.metrics,
+            offsetTop: accumulator.offsetTop + row.height
+          };
+        },
+        { metrics: [], offsetTop: 0 }
+      ).metrics,
+    [chartRows]
+  );
   const taskRowById = useMemo(
     () =>
       new Map(
@@ -686,29 +706,6 @@ export const GanttChart = forwardRef<GanttChartHandle, {
   }, [dayWidth]);
 
   useEffect(() => {
-    const validProjectIds = new Set(allProjectIds);
-
-    setVisibleProjectPhases((current) => {
-      const next = Object.fromEntries(Object.entries(current).filter(([projectId]) => validProjectIds.has(projectId)));
-      return Object.keys(next).length === Object.keys(current).length ? current : next;
-    });
-
-    setHiddenProjectBars((current) => {
-      const next = Object.fromEntries(Object.entries(current).filter(([projectId]) => validProjectIds.has(projectId)));
-      return Object.keys(next).length === Object.keys(current).length ? current : next;
-    });
-  }, [allProjectIds]);
-
-  useEffect(() => {
-    const validPhaseIds = new Set(allPersistablePhaseIds);
-
-    setHiddenPhaseBars((current) => {
-      const next = Object.fromEntries(Object.entries(current).filter(([phaseId]) => validPhaseIds.has(phaseId)));
-      return Object.keys(next).length === Object.keys(current).length ? current : next;
-    });
-  }, [allPersistablePhaseIds]);
-
-  useEffect(() => {
     window.localStorage.setItem(
       CHART_VIEW_STATE_STORAGE_KEY,
       JSON.stringify({
@@ -725,13 +722,13 @@ export const GanttChart = forwardRef<GanttChartHandle, {
     );
   }, [expandedPhases, hiddenPhaseBars, hiddenProjectBars, leftPanelWidth, scrollLeft, scrollTop, visibleProjectPhases, zoomLevel]);
 
-  const captureZoomFocus = () => {
+  const captureZoomFocus = useCallback(() => {
     const mainScroll = mainScrollRef.current;
     if (!mainScroll) return;
 
     const viewportCenter = mainScroll.scrollLeft + mainScroll.clientWidth / 2;
     pendingZoomFocusDay.current = viewportCenter / dayWidth;
-  };
+  }, [dayWidth]);
 
   const togglePhase = (phaseId: string) => {
     setExpandedPhases((prev) => ({ ...prev, [phaseId]: !(prev[phaseId] ?? false) }));
@@ -888,9 +885,9 @@ export const GanttChart = forwardRef<GanttChartHandle, {
     });
   };
 
-  const setZoomFromIndex = (nextIndex: number) => {
+  const setZoomFromIndex = useCallback((nextIndex: number) => {
     setZoomLevel(ZOOM_LEVELS[Math.max(0, Math.min(ZOOM_LEVELS.length - 1, nextIndex))]);
-  };
+  }, []);
 
   const centerTaskBarInView = useCallback(
     (taskId: string) => {
@@ -920,17 +917,17 @@ export const GanttChart = forwardRef<GanttChartHandle, {
     [centerTaskBarInView, onTaskClick]
   );
 
-  const handleZoomIn = () => {
+  const handleZoomIn = useCallback(() => {
     captureZoomFocus();
     const currentIndex = ZOOM_LEVELS.indexOf(zoomLevel);
     setZoomFromIndex(currentIndex - 1);
-  };
+  }, [captureZoomFocus, setZoomFromIndex, zoomLevel]);
 
-  const handleZoomOut = () => {
+  const handleZoomOut = useCallback(() => {
     captureZoomFocus();
     const currentIndex = ZOOM_LEVELS.indexOf(zoomLevel);
     setZoomFromIndex(currentIndex + 1);
-  };
+  }, [captureZoomFocus, setZoomFromIndex, zoomLevel]);
 
   useImperativeHandle(
     ref,
@@ -940,7 +937,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
       canZoomIn: zoomLevel !== 'day',
       canZoomOut: zoomLevel !== 'month'
     }),
-    [zoomLevel]
+    [handleZoomIn, handleZoomOut, zoomLevel]
   );
 
   useEffect(() => {
