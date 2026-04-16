@@ -40,5 +40,16 @@ This file logs key decisions so both Windsurf and Anti-gravity AIs stay informed
 - **Still pending**: Phase 3 — refactor project edit flow into a transaction-safe Supabase RPC. Phase 4 — add Vitest regression tests for edit/rebuild failure paths.
 - **References**: `PRE_PRODUCTION_GATE_WRITEUP.md`, `docs/runbooks/production-backups.md`
 
+### ADR-006: Downstream dependencies can be toggled per scope edit
+- **Date**: 2026-04-16
+- **Context**: Issue `#52` started from a reported production scheduling mismatch, but the investigation showed the immediate example was more about missing dependency relationships than a broken engine. The requested product behavior still had value: when manually moving a scope, users need to choose whether each downstream dependency should follow that move.
+- **Decision**:
+  1. Add `dependencies.follow_predecessor_changes BOOLEAN NOT NULL DEFAULT TRUE` so each live dependency can persist whether it should follow predecessor movement.
+  2. Surface downstream dependencies in the right-hand scope panel with a checkbox per successor, defaulted on.
+  3. When a downstream dependency is unchecked, saving a predecessor move freezes that successor at its current dates instead of letting it inherit the predecessor's moved schedule.
+  4. Use the actual Vercel deployment environment for the header badge so production deployments show `production` even when deployed from a feature branch.
+- **Operational note**: The migration was applied to `branch-super-base` during development and later applied directly to production after the production smoke test revealed the column was missing there.
+- **Rationale**: Keeps standard dependency behavior as the default, adds a clear escape hatch for selective downstream movement, and prevents silent UI reversion caused by missing schema in promoted environments.
+
 ---
 *New decisions should be added here as the project evolves.*
