@@ -21,6 +21,12 @@ This project is edited in both **Windsurf** and **Anti-gravity** IDEs.
   - Fixed side panel initialization to prefer saved manual dates over recalculated defaults.
   - Restored editable task Start/Finish date inputs (with calendar icons) in Edit Project modal and persisted those values through project save.
   - Verified build passes (`npm run build`).
+- [x] [WS] Issue 52 - Downstream dependency follow behavior is now user-toggleable from the side panel.
+  - Added a persisted `follow_predecessor_changes` flag on live dependencies via `supabase/migrations/20260416000100_add_follow_predecessor_changes_to_dependencies.sql`.
+  - Added a `Downstream Dependencies` section in the side panel with per-successor checkboxes defaulted on.
+  - Updated scheduling/save behavior so unchecked successors hold their current dates when a predecessor move is saved.
+  - Applied the new dependency-column schema to both `branch-super-base` and production after smoke testing.
+  - Updated the header environment badge to use Vercel's deployment environment so production no longer shows `preview testing`.
 
 ## 🚀 Feature Requests
 - [ ] **Multi-User Collaboration**: Allow multiple project managers to edit simultaneously.

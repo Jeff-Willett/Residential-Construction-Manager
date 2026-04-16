@@ -1,0 +1,2 @@
+ALTER TABLE dependencies
+ADD COLUMN IF NOT EXISTS follow_predecessor_changes BOOLEAN NOT NULL DEFAULT TRUE;

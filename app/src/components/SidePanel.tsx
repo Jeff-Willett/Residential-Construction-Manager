@@ -21,7 +21,16 @@ function getWorkingDaysDiff(startStr: string, endStr: string): number {
 }
 
 export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => void }) {
-  const { updateTaskFields, updateTaskDuration, updateTaskLag, updateTaskSubcontractor, projects, tasks, dependencies } = useProjectStore();
+  const {
+    updateTaskFields,
+    updateTaskDuration,
+    updateTaskLag,
+    updateTaskSubcontractor,
+    updateDependencyFollowSetting,
+    projects,
+    tasks,
+    dependencies
+  } = useProjectStore();
   
   const [durationInput, setDurationInput] = useState(task.duration.toString());
   const [vendorInput, setVendorInput] = useState(task.subcontractor || '');
@@ -84,6 +93,14 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
 
   const predIds = dependencies.filter(d => d.successor_id === task.id).map(d => d.predecessor_id);
   const predecessors = tasks.filter(t => predIds.includes(t.id));
+  const downstreamDependencies = dependencies
+    .filter((dependency) => dependency.predecessor_id === task.id)
+    .map((dependency) => ({
+      dependency,
+      successor: tasks.find((candidate) => candidate.id === dependency.successor_id) ?? null
+    }))
+    .filter((item): item is { dependency: typeof dependencies[number]; successor: EngineTask } => Boolean(item.successor))
+    .sort((a, b) => a.successor.name.localeCompare(b.successor.name));
   const latestPred = [...predecessors].sort((a,b) => (b.calculated_finish || '').localeCompare(a.calculated_finish || ''))[0];
   const hasLogicConflict = ((task.logic_violation_days || 0) > 0 || (task.lag || 0) < 0) && latestPred;
   const acceptedLag = (task.lag || 0) + (task.delay_days || 0);
@@ -98,14 +115,39 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
         finalLag = task.lag + dateDrift;
     }
 
+    const normalizedManualStart = startDateStr || null;
+    const normalizedManualFinish = finishDateStr || null;
+    const hasScheduleChanges =
+      (!isNaN(dur) && dur > 0 ? dur !== task.duration : false) ||
+      finalLag !== task.lag ||
+      normalizedManualStart !== (task.manual_start ?? null) ||
+      normalizedManualFinish !== (task.manual_finish ?? null);
+
+    const frozenSuccessors = hasScheduleChanges
+      ? downstreamDependencies
+          .filter(({ dependency }) => dependency.follow_predecessor_changes === false)
+          .map(({ successor }) => ({
+            taskId: successor.id,
+            manual_start: successor.manual_start ?? successor.calculated_start ?? null,
+            manual_finish: successor.manual_finish ?? successor.calculated_finish ?? null
+          }))
+      : [];
+
     await updateTaskFields(task.id, {
       duration: !isNaN(dur) && dur > 0 ? dur : undefined,
       lag: finalLag,
       subcontractor: vendorInput || null,
       bottleneck_vendor: isResourceConstrained && vendorInput ? vendorInput : null,
-      manual_start: startDateStr || null,
-      manual_finish: finishDateStr || null
+      manual_start: normalizedManualStart,
+      manual_finish: normalizedManualFinish
     });
+
+    for (const successor of frozenSuccessors) {
+      await updateTaskFields(successor.taskId, {
+        manual_start: successor.manual_start,
+        manual_finish: successor.manual_finish
+      });
+    }
   };
 
   return (
@@ -302,6 +344,46 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
                <span className="text-slate-400 text-xs block">Bottleneck</span>
                <span className="text-slate-200 tracking-tight truncate block">{task.bottleneck_vendor || 'None'}</span>
              </div>
+           </div>
+
+           <div className="mt-4 rounded-lg border border-slate-700/50 bg-slate-900/40 p-3">
+             <div className="flex items-center justify-between gap-3">
+               <div>
+                 <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">Downstream Dependencies</div>
+                 <div className="mt-1 text-[11px] text-slate-500">
+                   Checked items will follow manual movement on this scope. Uncheck to hold their current dates when you save this scope.
+                 </div>
+               </div>
+               <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">{downstreamDependencies.length} links</div>
+             </div>
+
+             {downstreamDependencies.length === 0 ? (
+               <div className="mt-3 text-sm text-slate-500">No downstream items are linked to this scope yet.</div>
+             ) : (
+               <div className="mt-3 space-y-2">
+                 {downstreamDependencies.map(({ dependency, successor }) => (
+                   <label
+                     key={dependency.id}
+                     className="flex items-start gap-3 rounded-md border border-slate-800 bg-slate-950/70 px-3 py-2 text-sm text-slate-200"
+                   >
+                     <input
+                       type="checkbox"
+                       checked={dependency.follow_predecessor_changes !== false}
+                       onChange={(event) => {
+                         void updateDependencyFollowSetting(dependency.id, event.target.checked);
+                       }}
+                       className="mt-0.5 h-4 w-4 rounded border-slate-600 bg-slate-900 text-cyan-500 focus:ring-cyan-500/50"
+                     />
+                     <div className="min-w-0 flex-1">
+                       <div className="font-medium text-slate-100">{successor.name}</div>
+                       <div className="mt-1 text-[11px] text-slate-500">
+                         Current start {successor.calculated_start ? format(parseISO(successor.calculated_start), 'MMM d') : '-'}
+                       </div>
+                     </div>
+                   </label>
+                 ))}
+               </div>
+             )}
            </div>
         </div>
       </div>
