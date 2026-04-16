@@ -192,6 +192,54 @@ function formatDbError(error: unknown, fallback: string): Error {
   return new Error(parts.join(' | '));
 }
 
+type ProjectDependencyPair = {
+  predecessor_source_task_id: string;
+  successor_source_task_id: string;
+};
+
+function rebuildDependencyPairsAfterTaskRemoval(
+  dependencyPairs: ProjectDependencyPair[],
+  retainedSourceTaskIds: Set<string>
+): ProjectDependencyPair[] {
+  const successorsByTaskId = new Map<string, string[]>();
+
+  for (const dependency of dependencyPairs) {
+    const successors = successorsByTaskId.get(dependency.predecessor_source_task_id) ?? [];
+    successors.push(dependency.successor_source_task_id);
+    successorsByTaskId.set(dependency.predecessor_source_task_id, successors);
+  }
+
+  const rebuiltPairs = new Set<string>();
+
+  const connectRetainedSuccessors = (sourceTaskId: string, nextTaskId: string, visitedRemoved: Set<string>) => {
+    if (visitedRemoved.has(nextTaskId)) return;
+
+    if (retainedSourceTaskIds.has(nextTaskId)) {
+      if (sourceTaskId !== nextTaskId) {
+        rebuiltPairs.add(`${sourceTaskId}->${nextTaskId}`);
+      }
+      return;
+    }
+
+    visitedRemoved.add(nextTaskId);
+
+    for (const successorTaskId of successorsByTaskId.get(nextTaskId) ?? []) {
+      connectRetainedSuccessors(sourceTaskId, successorTaskId, visitedRemoved);
+    }
+  };
+
+  for (const retainedTaskId of retainedSourceTaskIds) {
+    for (const successorTaskId of successorsByTaskId.get(retainedTaskId) ?? []) {
+      connectRetainedSuccessors(retainedTaskId, successorTaskId, new Set<string>());
+    }
+  }
+
+  return Array.from(rebuiltPairs).map((key) => {
+    const [predecessor_source_task_id, successor_source_task_id] = key.split('->');
+    return { predecessor_source_task_id, successor_source_task_id };
+  });
+}
+
 interface ProjectState {
   projects: Project[];
   tasks: EngineTask[];
@@ -649,20 +697,23 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         existingProjectTaskIds.has(dependency.predecessor_id) || existingProjectTaskIds.has(dependency.successor_id)
     );
 
-    const projectDependencyPairs = projectDependencies
-      .filter(
-        (dependency) =>
-          existingProjectTaskIds.has(dependency.predecessor_id) && existingProjectTaskIds.has(dependency.successor_id)
-      )
-      .map((dependency) => ({
-        predecessor_source_task_id: dependency.predecessor_id,
-        successor_source_task_id: dependency.successor_id
-      }))
-      .filter(
-        (dependency) =>
-          retainedSourceTaskIds.has(dependency.predecessor_source_task_id) &&
-          retainedSourceTaskIds.has(dependency.successor_source_task_id)
-      );
+    const projectDependencyPairs = rebuildDependencyPairsAfterTaskRemoval(
+      projectDependencies
+        .filter(
+          (dependency) =>
+            existingProjectTaskIds.has(dependency.predecessor_id) && existingProjectTaskIds.has(dependency.successor_id)
+        )
+        .map((dependency) => ({
+          predecessor_source_task_id: dependency.predecessor_id,
+          successor_source_task_id: dependency.successor_id
+        }))
+        .filter(
+          (dependency) =>
+            retainedSourceTaskIds.has(dependency.predecessor_source_task_id) &&
+            retainedSourceTaskIds.has(dependency.successor_source_task_id)
+        ),
+      retainedSourceTaskIds
+    );
     const createdTaskIds: string[] = [];
 
     try {
