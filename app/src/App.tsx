@@ -12,6 +12,7 @@ import { useShallow } from 'zustand/react/shallow';
 const APP_VERSION = __APP_VERSION__;
 const APP_BRANCH = __GIT_BRANCH__;
 const APP_COMMIT = __GIT_COMMIT__;
+const APP_VERCEL_ENV = __VERCEL_ENV__;
 const CHART_VIEW_STATE_STORAGE_KEY = 'gantt:view-state';
 const HOME_FILTERS: ActiveFilters = { projects: [], vendors: [], scopes: [] };
 
@@ -25,6 +26,8 @@ type UrlViewState = {
 
 const getEnvironmentLabel = () => {
   if (import.meta.env.DEV) return 'local testing';
+  if (APP_VERCEL_ENV === 'production') return 'production';
+  if (APP_VERCEL_ENV === 'preview') return 'preview testing';
   if (APP_BRANCH === 'main') return 'production';
   return 'preview testing';
 };
