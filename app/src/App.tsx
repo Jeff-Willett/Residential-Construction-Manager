@@ -24,6 +24,18 @@ type UrlViewState = {
   filters: ActiveFilters;
 };
 
+type ResettableChartViewState = {
+  version: 1;
+  zoomLevel: 'day' | 'week' | 'month';
+  leftPanelWidth: number;
+  visibleProjectPhases: Record<string, boolean>;
+  expandedPhases: Record<string, boolean>;
+  hiddenProjectBars: Record<string, boolean>;
+  hiddenPhaseBars: Record<string, boolean>;
+  scrollTop: number;
+  scrollLeft: number;
+};
+
 const getEnvironmentLabel = () => {
   if (import.meta.env.DEV) return 'local testing';
   if (APP_VERCEL_ENV === 'production') return 'production';
@@ -69,6 +81,43 @@ const writeUrlViewState = ({ selectedTaskId, editingProjectId, modal, filters }:
   const nextSearch = params.toString();
   const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`;
   window.history.replaceState(null, '', nextUrl);
+};
+
+const readPreservedLeftPanelWidth = () => {
+  if (typeof window === 'undefined') return 272;
+
+  try {
+    const rawValue = window.localStorage.getItem(CHART_VIEW_STATE_STORAGE_KEY);
+    if (!rawValue) return 272;
+
+    const parsed = JSON.parse(rawValue) as Partial<ResettableChartViewState> | null;
+    if (typeof parsed?.leftPanelWidth !== 'number' || !Number.isFinite(parsed.leftPanelWidth)) {
+      return 272;
+    }
+
+    return Math.max(200, Math.min(520, parsed.leftPanelWidth));
+  } catch {
+    return 272;
+  }
+};
+
+const resetPersistedChartViewState = () => {
+  if (typeof window === 'undefined') return;
+
+  const leftPanelWidth = readPreservedLeftPanelWidth();
+  const resetState: ResettableChartViewState = {
+    version: 1,
+    zoomLevel: 'day',
+    leftPanelWidth,
+    visibleProjectPhases: {},
+    expandedPhases: {},
+    hiddenProjectBars: {},
+    hiddenPhaseBars: {},
+    scrollTop: 0,
+    scrollLeft: 0
+  };
+
+  window.localStorage.setItem(CHART_VIEW_STATE_STORAGE_KEY, JSON.stringify(resetState));
 };
 
 function App() {
@@ -153,9 +202,7 @@ function App() {
     setEditingProjectId(null);
     setOpenModal(null);
     setActiveFilters(HOME_FILTERS);
-    if (typeof window !== 'undefined') {
-      window.localStorage.removeItem(CHART_VIEW_STATE_STORAGE_KEY);
-    }
+    resetPersistedChartViewState();
     setChartResetKey((current) => current + 1);
   };
 
