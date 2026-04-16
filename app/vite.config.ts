@@ -22,6 +22,7 @@ const readGitValue = (command: string, fallback: string) => {
 const appVersion = readAppVersion()
 const gitBranch = readGitValue('git branch --show-current', 'unknown-branch')
 const gitCommit = readGitValue('git rev-parse --short HEAD', 'unknown-commit')
+const vercelEnv = process.env.VERCEL_ENV ?? process.env.PUBLIC_VERCEL_ENV ?? null
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -29,6 +30,7 @@ export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(appVersion),
     __GIT_BRANCH__: JSON.stringify(gitBranch),
-    __GIT_COMMIT__: JSON.stringify(gitCommit)
+    __GIT_COMMIT__: JSON.stringify(gitCommit),
+    __VERCEL_ENV__: JSON.stringify(vercelEnv)
   }
 })
