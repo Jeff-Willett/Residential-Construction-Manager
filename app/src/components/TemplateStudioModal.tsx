@@ -11,6 +11,10 @@ type PhaseDraft = {
   phase_order: number;
 };
 
+type PendingPhaseDraft = PhaseDraft & {
+  localId: string;
+};
+
 type TemplateDraft = {
   phase_template_id: string | null;
   task_order: number;
@@ -18,6 +22,21 @@ type TemplateDraft = {
   subcontractor: string;
   default_days: number;
   bottleneck_vendor: string;
+};
+
+type PendingTemplateDraft = TemplateDraft & {
+  localId: string;
+};
+
+type PendingDependencyDraft = {
+  localId: string;
+  predecessor_id: string;
+  successor_id: string;
+};
+
+type DependencyDraft = {
+  predecessor_id: string;
+  successor_id: string;
 };
 
 const STUDIO_TABS: { id: StudioTab; label: string; icon: typeof Info }[] = [
@@ -74,6 +93,52 @@ function wouldCreateCycle(
   return false;
 }
 
+function syncBottleneckVendor(currentBottleneckVendor: string, nextSubcontractor: string) {
+  return currentBottleneckVendor ? nextSubcontractor : currentBottleneckVendor;
+}
+
+function getDependencyGraphIssue(
+  dependencies: Array<{ predecessor_id: string; successor_id: string }>
+): string | null {
+  const keys = new Set<string>();
+  const adjacency = new Map<string, string[]>();
+  const inDegree = new Map<string, number>();
+
+  for (const dependency of dependencies) {
+    if (!dependency.predecessor_id || !dependency.successor_id) return 'Each dependency needs both scope selections.';
+    if (dependency.predecessor_id === dependency.successor_id) return 'A scope cannot depend on itself.';
+
+    const key = `${dependency.predecessor_id}->${dependency.successor_id}`;
+    if (keys.has(key)) return 'That dependency already exists in the current draft.';
+    keys.add(key);
+
+    const next = adjacency.get(dependency.predecessor_id) ?? [];
+    next.push(dependency.successor_id);
+    adjacency.set(dependency.predecessor_id, next);
+
+    if (!inDegree.has(dependency.predecessor_id)) inDegree.set(dependency.predecessor_id, 0);
+    inDegree.set(dependency.successor_id, (inDegree.get(dependency.successor_id) ?? 0) + 1);
+  }
+
+  const queue: string[] = [];
+  inDegree.forEach((degree, nodeId) => {
+    if (degree === 0) queue.push(nodeId);
+  });
+
+  let visited = 0;
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    visited += 1;
+    (adjacency.get(current) ?? []).forEach((next) => {
+      const nextDegree = (inDegree.get(next) ?? 0) - 1;
+      inDegree.set(next, nextDegree);
+      if (nextDegree === 0) queue.push(next);
+    });
+  }
+
+  return visited === inDegree.size ? null : 'This dependency map contains a circular dependency.';
+}
+
 export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
   const {
     phaseTemplates,
@@ -114,6 +179,13 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
 
   const [phaseDrafts, setPhaseDrafts] = useState<Record<string, PhaseDraft>>({});
   const [templateDrafts, setTemplateDrafts] = useState<Record<string, TemplateDraft>>({});
+  const [pendingPhaseCreates, setPendingPhaseCreates] = useState<PendingPhaseDraft[]>([]);
+  const [pendingPhaseDeletes, setPendingPhaseDeletes] = useState<string[]>([]);
+  const [pendingTemplateCreates, setPendingTemplateCreates] = useState<PendingTemplateDraft[]>([]);
+  const [pendingTemplateDeletes, setPendingTemplateDeletes] = useState<string[]>([]);
+  const [dependencyDrafts, setDependencyDrafts] = useState<Record<string, DependencyDraft>>({});
+  const [pendingDependencyCreates, setPendingDependencyCreates] = useState<PendingDependencyDraft[]>([]);
+  const [pendingDependencyDeletes, setPendingDependencyDeletes] = useState<string[]>([]);
 
   const [newPhase, setNewPhase] = useState<PhaseDraft>({ name: '', phase_order: phaseTemplates.length + 1 });
   const [newTemplate, setNewTemplate] = useState<TemplateDraft>({
@@ -138,11 +210,31 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
         ])
       )
     );
+    setPendingPhaseCreates([]);
+    setPendingPhaseDeletes([]);
   }, [phaseTemplates]);
 
   useEffect(() => {
     setTemplateDrafts(buildTemplateDrafts(templates));
+    setPendingTemplateCreates([]);
+    setPendingTemplateDeletes([]);
   }, [templates]);
+
+  useEffect(() => {
+    setDependencyDrafts(
+      Object.fromEntries(
+        templateDependencies.map((dependency) => [
+          dependency.id,
+          {
+            predecessor_id: dependency.predecessor_id,
+            successor_id: dependency.successor_id
+          }
+        ])
+      )
+    );
+    setPendingDependencyCreates([]);
+    setPendingDependencyDeletes([]);
+  }, [templateDependencies]);
 
   useEffect(() => {
     setNewPhase((current) => ({
@@ -159,39 +251,144 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
     }));
   }, [phaseTemplates, templates.length]);
 
+  const visiblePhaseTemplates = useMemo(() => {
+    return phaseTemplates.filter((phase) => !pendingPhaseDeletes.includes(phase.id));
+  }, [pendingPhaseDeletes, phaseTemplates]);
+
+  const displayedPhaseRows = useMemo(() => {
+    return [
+      ...visiblePhaseTemplates.map((phase) => ({
+        id: phase.id,
+        isNew: false,
+        draft: phaseDrafts[phase.id] ?? { name: phase.name, phase_order: phase.phase_order },
+        sourceName: phase.name
+      })),
+      ...pendingPhaseCreates.map((phase) => ({
+        id: phase.localId,
+        isNew: true,
+        draft: { name: phase.name, phase_order: phase.phase_order },
+        sourceName: phase.name
+      }))
+    ].sort((a, b) => {
+      if (a.draft.phase_order !== b.draft.phase_order) return a.draft.phase_order - b.draft.phase_order;
+      return a.draft.name.localeCompare(b.draft.name);
+    });
+  }, [pendingPhaseCreates, phaseDrafts, visiblePhaseTemplates]);
+
+  const phaseNameById = useMemo(() => {
+    return new Map(visiblePhaseTemplates.map((phase) => [phase.id, phase.name]));
+  }, [visiblePhaseTemplates]);
+
+  const phaseOrderById = useMemo(() => {
+    return new Map(visiblePhaseTemplates.map((phase) => [phase.id, phase.phase_order]));
+  }, [visiblePhaseTemplates]);
+
+  const visibleTemplates = useMemo(() => {
+    return templates.filter((template) => !pendingTemplateDeletes.includes(template.id));
+  }, [pendingTemplateDeletes, templates]);
+
+  const dependencyTemplateOptions = useMemo(() => {
+    return visibleTemplates
+      .slice()
+      .sort((a, b) => {
+        if (a.task_order !== b.task_order) return a.task_order - b.task_order;
+        return a.scope.localeCompare(b.scope);
+      })
+      .map((template) => ({
+        id: template.id,
+        label: `${template.scope} · ${template.phase_template_id ? phaseNameById.get(template.phase_template_id) ?? 'Unphased' : 'Unphased'}`
+      }));
+  }, [phaseNameById, visibleTemplates]);
+
+  const displayedTemplateRows = useMemo(() => {
+    return [
+      ...visibleTemplates.map((template) => {
+        const draft = templateDrafts[template.id] ?? {
+          phase_template_id: template.phase_template_id,
+          task_order: template.task_order,
+          scope: template.scope,
+          subcontractor: template.subcontractor ?? '',
+          default_days: template.default_days,
+          bottleneck_vendor: template.bottleneck_vendor ?? ''
+        };
+
+        return {
+          id: template.id,
+          isNew: false,
+          draft,
+          sourceScope: template.scope,
+          phaseOrder: draft.phase_template_id ? phaseOrderById.get(draft.phase_template_id) ?? 0 : 0
+        };
+      }),
+      ...pendingTemplateCreates.map((template) => ({
+        id: template.localId,
+        isNew: true,
+        draft: {
+          phase_template_id: template.phase_template_id,
+          task_order: template.task_order,
+          scope: template.scope,
+          subcontractor: template.subcontractor,
+          default_days: template.default_days,
+          bottleneck_vendor: template.bottleneck_vendor
+        },
+        sourceScope: template.scope,
+        phaseOrder: template.phase_template_id ? phaseOrderById.get(template.phase_template_id) ?? 0 : 0
+      }))
+    ];
+  }, [pendingTemplateCreates, phaseOrderById, templateDrafts, visibleTemplates]);
+
   const phaseCounts = useMemo(() => {
     const counts = new Map<string, number>();
-    templates.forEach((template) => {
-      if (!template.phase_template_id) return;
-      counts.set(template.phase_template_id, (counts.get(template.phase_template_id) ?? 0) + 1);
+    displayedTemplateRows.forEach((template) => {
+      if (!template.draft.phase_template_id) return;
+      counts.set(template.draft.phase_template_id, (counts.get(template.draft.phase_template_id) ?? 0) + 1);
     });
     return counts;
-  }, [templates]);
+  }, [displayedTemplateRows]);
 
   const templateLabelById = useMemo(() => {
-    return new Map(templates.map((template) => [template.id, template.scope]));
-  }, [templates]);
+    return new Map(displayedTemplateRows.map((template) => [template.id, template.draft.scope]));
+  }, [displayedTemplateRows]);
 
   const templatesByPhase = useMemo(() => {
-    const buckets = new Map<string, typeof templates>();
-    const orderedTemplates = [...templates].sort((a, b) => {
-      if (a.phase_order !== b.phase_order) return a.phase_order - b.phase_order;
-      if (a.task_order !== b.task_order) return a.task_order - b.task_order;
-      return a.scope.localeCompare(b.scope);
+    const buckets = new Map<string, typeof displayedTemplateRows>();
+    const orderedTemplates = [...displayedTemplateRows].sort((a, b) => {
+      if (a.phaseOrder !== b.phaseOrder) return a.phaseOrder - b.phaseOrder;
+      if (a.draft.task_order !== b.draft.task_order) return a.draft.task_order - b.draft.task_order;
+      return a.draft.scope.localeCompare(b.draft.scope);
     });
 
     orderedTemplates.forEach((template) => {
-      const key = template.phase_template_id ?? 'unphased';
+      const key = template.draft.phase_template_id ?? 'unphased';
       const next = buckets.get(key) ?? [];
       next.push(template);
       buckets.set(key, next);
     });
 
     return buckets;
-  }, [templates]);
+  }, [displayedTemplateRows]);
+
+  const effectiveDependencies = useMemo(() => {
+    const removedIds = new Set(pendingDependencyDeletes);
+    const next = templateDependencies
+      .filter((dependency) => !removedIds.has(dependency.id))
+      .map((dependency) => ({
+        id: dependency.id,
+        predecessor_id: dependencyDrafts[dependency.id]?.predecessor_id ?? dependency.predecessor_id,
+        successor_id: dependencyDrafts[dependency.id]?.successor_id ?? dependency.successor_id
+      }));
+    next.push(
+      ...pendingDependencyCreates.map((dependency) => ({
+        id: dependency.localId,
+        predecessor_id: dependency.predecessor_id,
+        successor_id: dependency.successor_id
+      }))
+    );
+    return next;
+  }, [dependencyDrafts, pendingDependencyCreates, pendingDependencyDeletes, templateDependencies]);
 
   const dependencyRows = useMemo(() => {
-    return [...templateDependencies]
+    return [...effectiveDependencies]
       .map((dependency) => ({
         ...dependency,
         predecessorLabel: templateLabelById.get(dependency.predecessor_id) ?? 'Unknown scope',
@@ -201,7 +398,7 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
         if (a.successorLabel !== b.successorLabel) return a.successorLabel.localeCompare(b.successorLabel);
         return a.predecessorLabel.localeCompare(b.predecessorLabel);
       });
-  }, [templateDependencies, templateLabelById]);
+  }, [effectiveDependencies, templateLabelById]);
 
   const liveTemplateCount = useMemo(() => {
     return new Set(tasks.map((task) => task.template_id).filter(Boolean)).size;
@@ -222,25 +419,223 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
     }
   };
 
-  const phaseNameForTemplate = (phaseId: string | null) => {
-    if (!phaseId) return 'Unphased';
-    return phaseTemplates.find((phase) => phase.id === phaseId)?.name ?? 'Unphased';
-  };
-
   const dependencyDuplicate = useMemo(() => {
-    return templateDependencies.some(
+    return effectiveDependencies.some(
       (dependency) =>
         dependency.predecessor_id === newDependency.predecessor_id &&
         dependency.successor_id === newDependency.successor_id
     );
-  }, [newDependency.predecessor_id, newDependency.successor_id, templateDependencies]);
+  }, [effectiveDependencies, newDependency.predecessor_id, newDependency.successor_id]);
 
   const dependencyCycle = useMemo(() => {
     if (!newDependency.predecessor_id || !newDependency.successor_id) return false;
-    return wouldCreateCycle(templateDependencies, newDependency.predecessor_id, newDependency.successor_id);
-  }, [newDependency.predecessor_id, newDependency.successor_id, templateDependencies]);
+    return wouldCreateCycle(effectiveDependencies, newDependency.predecessor_id, newDependency.successor_id);
+  }, [effectiveDependencies, newDependency.predecessor_id, newDependency.successor_id]);
+
+  const dependencyGraphIssue = useMemo(() => {
+    return getDependencyGraphIssue(effectiveDependencies);
+  }, [effectiveDependencies]);
 
   const phaseDeleteBlocked = (phaseId: string) => (phaseCounts.get(phaseId) ?? 0) > 0;
+
+  const phaseHasChanges = useMemo(() => {
+    if (pendingPhaseCreates.length > 0 || pendingPhaseDeletes.length > 0) return true;
+    return visiblePhaseTemplates.some((phase) => {
+      const draft = phaseDrafts[phase.id];
+      return draft ? draft.name !== phase.name || draft.phase_order !== phase.phase_order : false;
+    });
+  }, [pendingPhaseCreates.length, pendingPhaseDeletes.length, phaseDrafts, visiblePhaseTemplates]);
+
+  const templateHasChanges = useMemo(() => {
+    if (pendingTemplateCreates.length > 0 || pendingTemplateDeletes.length > 0) return true;
+    return visibleTemplates.some((template) => {
+      const draft = templateDrafts[template.id];
+      return draft
+        ? draft.phase_template_id !== template.phase_template_id ||
+            draft.task_order !== template.task_order ||
+            draft.scope !== template.scope ||
+            draft.subcontractor !== (template.subcontractor ?? '') ||
+            draft.default_days !== template.default_days ||
+            draft.bottleneck_vendor !== (template.bottleneck_vendor ?? '')
+        : false;
+    });
+  }, [pendingTemplateCreates.length, pendingTemplateDeletes.length, templateDrafts, visibleTemplates]);
+
+  const dependencyHasChanges = useMemo(() => {
+    if (pendingDependencyCreates.length > 0 || pendingDependencyDeletes.length > 0) return true;
+    return templateDependencies.some((dependency) => {
+      const draft = dependencyDrafts[dependency.id];
+      return draft
+        ? draft.predecessor_id !== dependency.predecessor_id || draft.successor_id !== dependency.successor_id
+        : false;
+    });
+  }, [dependencyDrafts, pendingDependencyCreates.length, pendingDependencyDeletes.length, templateDependencies]);
+
+  const resetPhaseChanges = () => {
+    setPhaseDrafts(
+      Object.fromEntries(
+        phaseTemplates.map((phase) => [
+          phase.id,
+          {
+            name: phase.name,
+            phase_order: phase.phase_order
+          }
+        ])
+      )
+    );
+    setPendingPhaseCreates([]);
+    setPendingPhaseDeletes([]);
+    setNewPhase({ name: '', phase_order: phaseTemplates.length + 1 });
+  };
+
+  const resetTemplateChanges = () => {
+    setTemplateDrafts(buildTemplateDrafts(templates));
+    setPendingTemplateCreates([]);
+    setPendingTemplateDeletes([]);
+    setNewTemplate({
+      phase_template_id: visiblePhaseTemplates[0]?.id ?? null,
+      task_order: templates.length + 1,
+      scope: '',
+      subcontractor: '',
+      default_days: 1,
+      bottleneck_vendor: ''
+    });
+  };
+
+  const resetDependencyChanges = () => {
+    setDependencyDrafts(
+      Object.fromEntries(
+        templateDependencies.map((dependency) => [
+          dependency.id,
+          {
+            predecessor_id: dependency.predecessor_id,
+            successor_id: dependency.successor_id
+          }
+        ])
+      )
+    );
+    setPendingDependencyCreates([]);
+    setPendingDependencyDeletes([]);
+    setNewDependency({ predecessor_id: '', successor_id: '' });
+  };
+
+  const savePhaseChanges = () =>
+    runAction('Saved phase changes', async () => {
+      for (const phase of visiblePhaseTemplates) {
+        const draft = phaseDrafts[phase.id];
+        if (!draft) continue;
+        if (draft.name === phase.name && draft.phase_order === phase.phase_order) continue;
+        await updatePhaseTemplate(phase.id, draft);
+      }
+
+      for (const phase of pendingPhaseCreates) {
+        await createPhaseTemplate({
+          name: phase.name,
+          phase_order: phase.phase_order
+        });
+      }
+
+      for (const phaseId of pendingPhaseDeletes) {
+        await deletePhaseTemplate(phaseId);
+      }
+
+      resetPhaseChanges();
+    });
+
+  const saveTemplateChanges = () =>
+    runAction('Saved scope changes', async () => {
+      for (const template of visibleTemplates) {
+        const draft = templateDrafts[template.id];
+        if (!draft) continue;
+        const dirty =
+          draft.phase_template_id !== template.phase_template_id ||
+          draft.task_order !== template.task_order ||
+          draft.scope !== template.scope ||
+          draft.subcontractor !== (template.subcontractor ?? '') ||
+          draft.default_days !== template.default_days ||
+          draft.bottleneck_vendor !== (template.bottleneck_vendor ?? '');
+
+        if (!dirty) continue;
+
+        await updateTaskTemplate(template.id, {
+          ...draft,
+          subcontractor: draft.subcontractor.trim() || null,
+          bottleneck_vendor: draft.bottleneck_vendor.trim() || null
+        });
+      }
+
+      for (const template of pendingTemplateCreates) {
+        await createTaskTemplate({
+          ...template,
+          subcontractor: template.subcontractor.trim() || null,
+          bottleneck_vendor: template.bottleneck_vendor.trim() || null
+        });
+      }
+
+      for (const templateId of pendingTemplateDeletes) {
+        await deleteTaskTemplate(templateId);
+      }
+
+      resetTemplateChanges();
+    });
+
+  const saveDependencyChanges = () =>
+    runAction('Saved dependency changes', async () => {
+      const desiredDependencyKeys = new Set(
+        effectiveDependencies.map((dependency) => `${dependency.predecessor_id}->${dependency.successor_id}`)
+      );
+      const currentDependencyKeys = new Set(
+        templateDependencies.map((dependency) => `${dependency.predecessor_id}->${dependency.successor_id}`)
+      );
+
+      for (const dependency of templateDependencies) {
+        const key = `${dependency.predecessor_id}->${dependency.successor_id}`;
+        if (!desiredDependencyKeys.has(key)) {
+          await removeTemplateDependency(dependency.id);
+        }
+      }
+
+      for (const dependency of effectiveDependencies) {
+        const key = `${dependency.predecessor_id}->${dependency.successor_id}`;
+        if (!currentDependencyKeys.has(key)) {
+          await addTemplateDependency(dependency.predecessor_id, dependency.successor_id);
+        }
+      }
+
+      resetDependencyChanges();
+    });
+
+  const phaseSaveDisabled = !phaseHasChanges || !!busyLabel || displayedPhaseRows.some((phase) => !phase.draft.name.trim());
+  const templateSaveDisabled =
+    !templateHasChanges || !!busyLabel || displayedTemplateRows.some((template) => !template.draft.scope.trim());
+  const dependencySaveDisabled = !dependencyHasChanges || !!busyLabel || Boolean(dependencyGraphIssue);
+
+  const activeTabMeta =
+    activeTab === 'phases'
+      ? {
+          hasChanges: phaseHasChanges,
+          saveDisabled: phaseSaveDisabled,
+          onReset: resetPhaseChanges,
+          onSave: savePhaseChanges,
+          summary: `${pendingPhaseCreates.length} new, ${pendingPhaseDeletes.length} queued for delete`
+        }
+      : activeTab === 'templates'
+        ? {
+            hasChanges: templateHasChanges,
+            saveDisabled: templateSaveDisabled,
+            onReset: resetTemplateChanges,
+            onSave: saveTemplateChanges,
+            summary: `${pendingTemplateCreates.length} new, ${pendingTemplateDeletes.length} queued for delete`
+          }
+        : activeTab === 'dependencies'
+          ? {
+              hasChanges: dependencyHasChanges,
+              saveDisabled: dependencySaveDisabled,
+              onReset: resetDependencyChanges,
+              onSave: saveDependencyChanges,
+              summary: `${pendingDependencyCreates.length} added, ${pendingDependencyDeletes.length} removed`
+            }
+          : null;
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm p-4">
@@ -353,7 +748,7 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
                       <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
                         <div className="text-sm font-semibold text-slate-100">Scheduling constraints</div>
                         <p className="mt-2 text-sm text-slate-400">
-                          Bottleneck vendor assignments and default days that shape the resource-driven schedule.
+                          Bottleneck flags and default days that shape the resource-driven schedule.
                         </p>
                       </div>
                     </div>
@@ -369,7 +764,7 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
                         A scope cannot start until its latest predecessor is finished, plus any lag.
                       </div>
                       <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 text-sm text-slate-300">
-                        If a scope has a bottleneck vendor, that vendor can only be active on one matching scope at a time across all loaded projects.
+                        If a scope is marked as bottlenecked, its subcontractor can only be active on one matching scope at a time across all loaded projects.
                       </div>
                       <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 text-sm text-slate-300">
                         Weekends are skipped when start and finish dates are calculated.
@@ -403,12 +798,8 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
               {activeTab === 'phases' && (
                 <div className="space-y-6">
                   <div className="rounded-3xl border border-slate-800 bg-slate-950/60 p-6">
-                    <div className="flex items-center justify-between gap-4">
-                      <div>
-                        <div className="text-[11px] uppercase tracking-[0.22em] text-cyan-400 font-semibold">Add a phase</div>
-                        <p className="mt-2 text-sm text-slate-400">New phases are added to the template baseline and to currently loaded projects.</p>
-                      </div>
-                    </div>
+                    <div className="text-[11px] uppercase tracking-[0.22em] text-cyan-400 font-semibold">Queue a phase</div>
+                    <p className="mt-2 text-sm text-slate-400">Make as many phase edits as you want here, then save the tab once.</p>
                     <div className="mt-4 grid gap-3 md:grid-cols-[120px_minmax(0,1fr)_160px]">
                       <input
                         type="number"
@@ -430,12 +821,13 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
                       />
                       <button
                         disabled={!newPhase.name.trim() || !!busyLabel}
-                        onClick={() =>
-                          runAction(`Added phase "${newPhase.name.trim()}"`, async () => {
-                            await createPhaseTemplate(newPhase);
-                            setNewPhase({ name: '', phase_order: phaseTemplates.length + 2 });
-                          })
-                        }
+                        onClick={() => {
+                          setPendingPhaseCreates((current) => [
+                            ...current,
+                            { localId: crypto.randomUUID(), name: newPhase.name.trim(), phase_order: newPhase.phase_order }
+                          ]);
+                          setNewPhase({ name: '', phase_order: visiblePhaseTemplates.length + pendingPhaseCreates.length + 1 });
+                        }}
                         className="rounded-2xl bg-cyan-500/15 border border-cyan-500/30 px-4 py-3 font-medium text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center justify-center gap-2"
                       >
                         <Plus size={16} />
@@ -445,82 +837,75 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
                   </div>
 
                   <div className="space-y-4">
-                    {phaseTemplates
-                      .slice()
-                      .sort((a, b) => a.phase_order - b.phase_order)
-                      .map((phase) => {
-                        const draft = phaseDrafts[phase.id] ?? { name: phase.name, phase_order: phase.phase_order };
-                        const dirty = draft.name !== phase.name || draft.phase_order !== phase.phase_order;
-                        return (
-                          <div key={phase.id} className="rounded-3xl border border-slate-800 bg-slate-950/60 p-5">
-                            <div className="grid gap-4 lg:grid-cols-[120px_minmax(0,1fr)_auto_auto] lg:items-center">
+                    {displayedPhaseRows.map((phase) => (
+                      <div key={phase.id} className="rounded-3xl border border-slate-800 bg-slate-950/60 p-5">
+                        <div className="grid gap-4 lg:grid-cols-[120px_minmax(0,1fr)_auto] lg:items-center">
+                          <input
+                            type="number"
+                            min="1"
+                            value={phase.draft.phase_order}
+                            onChange={(event) => {
+                              const nextOrder = Math.max(1, Number(event.target.value) || 1);
+                              if (phase.isNew) {
+                                setPendingPhaseCreates((current) =>
+                                  current.map((item) => (item.localId === phase.id ? { ...item, phase_order: nextOrder } : item))
+                                );
+                                return;
+                              }
+                              setPhaseDrafts((current) => ({
+                                ...current,
+                                [phase.id]: { ...phase.draft, phase_order: nextOrder }
+                              }));
+                            }}
+                            className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100 focus:outline-none focus:border-cyan-500"
+                          />
+                          <div className="space-y-2">
+                            <div className="flex items-center gap-3">
                               <input
-                                type="number"
-                                min="1"
-                                value={draft.phase_order}
-                                onChange={(event) =>
+                                value={phase.draft.name}
+                                onChange={(event) => {
+                                  if (phase.isNew) {
+                                    setPendingPhaseCreates((current) =>
+                                      current.map((item) => (item.localId === phase.id ? { ...item, name: event.target.value } : item))
+                                    );
+                                    return;
+                                  }
                                   setPhaseDrafts((current) => ({
                                     ...current,
-                                    [phase.id]: {
-                                      ...draft,
-                                      phase_order: Math.max(1, Number(event.target.value) || 1)
-                                    }
-                                  }))
-                                }
-                                className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100 focus:outline-none focus:border-cyan-500"
-                              />
-                              <div className="space-y-2">
-                                <input
-                                  value={draft.name}
-                                  onChange={(event) =>
-                                    setPhaseDrafts((current) => ({
-                                      ...current,
-                                      [phase.id]: {
-                                        ...draft,
-                                        name: event.target.value
-                                      }
-                                    }))
-                                  }
-                                  className="w-full rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100 focus:outline-none focus:border-cyan-500"
-                                />
-                                <div className="text-sm text-slate-500">
-                                  {(phaseCounts.get(phase.id) ?? 0)} scopes currently assigned to this phase
-                                </div>
-                              </div>
-                              <button
-                                disabled={!dirty || !draft.name.trim() || !!busyLabel}
-                                onClick={() =>
-                                  runAction(`Saved phase "${draft.name.trim()}"`, async () => {
-                                    await updatePhaseTemplate(phase.id, draft);
-                                  })
-                                }
-                                className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 font-medium text-emerald-200 hover:bg-emerald-500/15 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center justify-center gap-2"
-                              >
-                                <Save size={16} />
-                                Save
-                              </button>
-                              <button
-                                disabled={phaseDeleteBlocked(phase.id) || !!busyLabel}
-                                onClick={() => {
-                                  if (!confirm(`Delete phase "${phase.name}"?`)) return;
-                                  runAction(`Deleted phase "${phase.name}"`, async () => {
-                                    await deletePhaseTemplate(phase.id);
-                                  });
+                                    [phase.id]: { ...phase.draft, name: event.target.value }
+                                  }));
                                 }}
-                                className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 font-medium text-red-200 hover:bg-red-500/15 disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center justify-center gap-2"
-                                title={
-                                  phaseDeleteBlocked(phase.id)
-                                    ? 'Move or remove its scopes before deleting this phase.'
-                                    : 'Delete empty phase'
-                                }
-                              >
-                                <Trash2 size={16} />
-                                Delete
-                              </button>
+                                className="w-full rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100 focus:outline-none focus:border-cyan-500"
+                              />
+                              {phase.isNew && (
+                                <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-cyan-200">
+                                  New
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-sm text-slate-500">
+                              {phase.isNew ? 'Queued for the next phase save.' : `${phaseCounts.get(phase.id) ?? 0} scopes currently assigned to this phase`}
                             </div>
                           </div>
-                        );
-                      })}
+                          <button
+                            disabled={(!phase.isNew && phaseDeleteBlocked(phase.id)) || !!busyLabel}
+                            onClick={() => {
+                              if (phase.isNew) {
+                                setPendingPhaseCreates((current) => current.filter((item) => item.localId !== phase.id));
+                                return;
+                              }
+                              if (!confirm(`Delete phase "${phase.sourceName}" when you save this tab?`)) return;
+                              setPendingPhaseDeletes((current) => [...current, phase.id]);
+                            }}
+                            className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 font-medium text-red-200 hover:bg-red-500/15 disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center justify-center gap-2"
+                            title={!phase.isNew && phaseDeleteBlocked(phase.id) ? 'Move or remove its scopes before deleting this phase.' : 'Queue this phase for removal'}
+                          >
+                            <Trash2 size={16} />
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
@@ -528,9 +913,9 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
               {activeTab === 'templates' && (
                 <div className="space-y-6">
                   <div className="rounded-3xl border border-slate-800 bg-slate-950/60 p-6">
-                    <div className="text-[11px] uppercase tracking-[0.22em] text-cyan-400 font-semibold">Add a scope template</div>
-                    <p className="mt-2 text-sm text-slate-400">New scope rows become part of the baseline for future projects.</p>
-                    <div className="mt-4 grid gap-3 lg:grid-cols-[180px_110px_minmax(0,1.4fr)_minmax(0,1fr)_110px_minmax(0,1fr)_150px]">
+                    <div className="text-[11px] uppercase tracking-[0.22em] text-cyan-400 font-semibold">Queue a scope template</div>
+                    <p className="mt-2 text-sm text-slate-400">Draft multiple scope edits in this tab, then save them together.</p>
+                    <div className="mt-4 grid gap-3 lg:grid-cols-[180px_110px_minmax(0,1.4fr)_minmax(0,1fr)_110px_160px_150px]">
                       <select
                         value={newTemplate.phase_template_id ?? ''}
                         onChange={(event) =>
@@ -542,7 +927,7 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
                         className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100 focus:outline-none focus:border-cyan-500"
                       >
                         <option value="">Unphased</option>
-                        {phaseTemplates
+                        {visiblePhaseTemplates
                           .slice()
                           .sort((a, b) => a.phase_order - b.phase_order)
                           .map((phase) => (
@@ -572,7 +957,11 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
                       <input
                         value={newTemplate.subcontractor}
                         onChange={(event) =>
-                          setNewTemplate((current) => ({ ...current, subcontractor: event.target.value }))
+                          setNewTemplate((current) => ({
+                            ...current,
+                            subcontractor: event.target.value,
+                            bottleneck_vendor: syncBottleneckVendor(current.bottleneck_vendor, event.target.value)
+                          }))
                         }
                         placeholder="Contractor"
                         className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100 focus:outline-none focus:border-cyan-500"
@@ -589,33 +978,45 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
                         }
                         className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100 focus:outline-none focus:border-cyan-500"
                       />
-                      <input
-                        value={newTemplate.bottleneck_vendor}
-                        onChange={(event) =>
-                          setNewTemplate((current) => ({ ...current, bottleneck_vendor: event.target.value }))
-                        }
-                        placeholder="Bottleneck vendor"
-                        className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100 focus:outline-none focus:border-cyan-500"
-                      />
+                      <label className="flex items-center gap-3 rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm text-slate-200">
+                        <input
+                          type="checkbox"
+                          checked={!!newTemplate.bottleneck_vendor}
+                          onChange={(event) =>
+                            setNewTemplate((current) => ({
+                              ...current,
+                              bottleneck_vendor: event.target.checked ? current.subcontractor : ''
+                            }))
+                          }
+                          disabled={!newTemplate.subcontractor.trim()}
+                          className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-cyan-500 focus:ring-cyan-500 focus:ring-offset-slate-900 disabled:opacity-40"
+                        />
+                        <span>Bottleneck</span>
+                      </label>
                       <button
                         disabled={!newTemplate.scope.trim() || !!busyLabel}
-                        onClick={() =>
-                          runAction(`Added scope "${newTemplate.scope.trim()}"`, async () => {
-                            await createTaskTemplate({
-                              ...newTemplate,
-                              subcontractor: newTemplate.subcontractor.trim() || null,
-                              bottleneck_vendor: newTemplate.bottleneck_vendor.trim() || null
-                            });
-                            setNewTemplate({
-                              phase_template_id: phaseTemplates[0]?.id ?? null,
-                              task_order: templates.length + 2,
-                              scope: '',
-                              subcontractor: '',
-                              default_days: 1,
-                              bottleneck_vendor: ''
-                            });
-                          })
-                        }
+                        onClick={() => {
+                          setPendingTemplateCreates((current) => [
+                            ...current,
+                            {
+                              localId: crypto.randomUUID(),
+                              phase_template_id: newTemplate.phase_template_id,
+                              task_order: newTemplate.task_order,
+                              scope: newTemplate.scope.trim(),
+                              subcontractor: newTemplate.subcontractor,
+                              default_days: newTemplate.default_days,
+                              bottleneck_vendor: newTemplate.bottleneck_vendor
+                            }
+                          ]);
+                          setNewTemplate({
+                            phase_template_id: visiblePhaseTemplates[0]?.id ?? null,
+                            task_order: displayedTemplateRows.length + 1,
+                            scope: '',
+                            subcontractor: '',
+                            default_days: 1,
+                            bottleneck_vendor: ''
+                          });
+                        }}
                         className="rounded-2xl bg-cyan-500/15 border border-cyan-500/30 px-4 py-3 font-medium text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center justify-center gap-2"
                       >
                         <Plus size={16} />
@@ -624,8 +1025,22 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
                     </div>
                   </div>
 
+                  <div className="rounded-3xl border border-slate-800 bg-slate-950/40 overflow-hidden">
+                    <div className="border-b border-slate-800 bg-slate-950/70 px-5 py-3">
+                      <div className="grid gap-3 xl:grid-cols-[180px_95px_minmax(0,1.4fr)_minmax(0,1fr)_100px_160px_auto]">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Phase</div>
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Order</div>
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Scope</div>
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Contractor</div>
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Days</div>
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Bottleneck</div>
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Actions</div>
+                      </div>
+                    </div>
+                  </div>
+
                   <div className="space-y-5">
-                    {phaseTemplates
+                    {visiblePhaseTemplates
                       .slice()
                       .sort((a, b) => a.phase_order - b.phase_order)
                       .map((phase) => {
@@ -643,151 +1058,176 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
                               </div>
                             </div>
                             <div className="divide-y divide-slate-800">
-                              {phaseTemplatesForSection.map((template) => {
-                                const draft = templateDrafts[template.id] ?? {
-                                  phase_template_id: template.phase_template_id,
-                                  task_order: template.task_order,
-                                  scope: template.scope,
-                                  subcontractor: template.subcontractor ?? '',
-                                  default_days: template.default_days,
-                                  bottleneck_vendor: template.bottleneck_vendor ?? ''
-                                };
-                                const dirty =
-                                  draft.phase_template_id !== template.phase_template_id ||
-                                  draft.task_order !== template.task_order ||
-                                  draft.scope !== template.scope ||
-                                  draft.subcontractor !== (template.subcontractor ?? '') ||
-                                  draft.default_days !== template.default_days ||
-                                  draft.bottleneck_vendor !== (template.bottleneck_vendor ?? '');
-
-                                return (
-                                  <div key={template.id} className="p-5">
-                                    <div className="grid gap-3 xl:grid-cols-[180px_95px_minmax(0,1.4fr)_minmax(0,1fr)_100px_minmax(0,1fr)_auto_auto]">
-                                      <select
-                                        value={draft.phase_template_id ?? ''}
-                                        onChange={(event) =>
-                                          setTemplateDrafts((current) => ({
-                                            ...current,
-                                            [template.id]: {
-                                              ...draft,
-                                              phase_template_id: event.target.value || null
+                              {phaseTemplatesForSection.map((template) => (
+                                <div key={template.id} className="p-5">
+                                  <div className="grid gap-3 xl:grid-cols-[180px_95px_minmax(0,1.4fr)_minmax(0,1fr)_100px_160px_auto]">
+                                    <select
+                                      value={template.draft.phase_template_id ?? ''}
+                                      onChange={(event) => {
+                                        const nextPhaseId = event.target.value || null;
+                                        if (template.isNew) {
+                                          setPendingTemplateCreates((current) =>
+                                            current.map((item) => (item.localId === template.id ? { ...item, phase_template_id: nextPhaseId } : item))
+                                          );
+                                          return;
+                                        }
+                                        setTemplateDrafts((current) => ({
+                                          ...current,
+                                          [template.id]: { ...template.draft, phase_template_id: nextPhaseId }
+                                        }));
+                                      }}
+                                      className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100 focus:outline-none focus:border-cyan-500"
+                                    >
+                                      <option value="">Unphased</option>
+                                      {visiblePhaseTemplates
+                                        .slice()
+                                        .sort((a, b) => a.phase_order - b.phase_order)
+                                        .map((phaseOption) => (
+                                          <option key={phaseOption.id} value={phaseOption.id}>
+                                            {phaseOption.phase_order}. {phaseOption.name}
+                                          </option>
+                                        ))}
+                                    </select>
+                                    <input
+                                      type="number"
+                                      min="1"
+                                      value={template.draft.task_order}
+                                      onChange={(event) => {
+                                        const nextOrder = Math.max(1, Number(event.target.value) || 1);
+                                        if (template.isNew) {
+                                          setPendingTemplateCreates((current) =>
+                                            current.map((item) => (item.localId === template.id ? { ...item, task_order: nextOrder } : item))
+                                          );
+                                          return;
+                                        }
+                                        setTemplateDrafts((current) => ({
+                                          ...current,
+                                          [template.id]: { ...template.draft, task_order: nextOrder }
+                                        }));
+                                      }}
+                                      className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100 focus:outline-none focus:border-cyan-500"
+                                    />
+                                    <div className="space-y-2">
+                                      <div className="flex items-center gap-3">
+                                        <input
+                                          value={template.draft.scope}
+                                          onChange={(event) => {
+                                            if (template.isNew) {
+                                              setPendingTemplateCreates((current) =>
+                                                current.map((item) => (item.localId === template.id ? { ...item, scope: event.target.value } : item))
+                                              );
+                                              return;
                                             }
-                                          }))
-                                        }
-                                        className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100 focus:outline-none focus:border-cyan-500"
-                                      >
-                                        <option value="">Unphased</option>
-                                        {phaseTemplates
-                                          .slice()
-                                          .sort((a, b) => a.phase_order - b.phase_order)
-                                          .map((phaseOption) => (
-                                            <option key={phaseOption.id} value={phaseOption.id}>
-                                              {phaseOption.phase_order}. {phaseOption.name}
-                                            </option>
-                                          ))}
-                                      </select>
-                                      <input
-                                        type="number"
-                                        min="1"
-                                        value={draft.task_order}
-                                        onChange={(event) =>
-                                          setTemplateDrafts((current) => ({
-                                            ...current,
-                                            [template.id]: {
-                                              ...draft,
-                                              task_order: Math.max(1, Number(event.target.value) || 1)
-                                            }
-                                          }))
-                                        }
-                                        className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100 focus:outline-none focus:border-cyan-500"
-                                      />
-                                      <input
-                                        value={draft.scope}
-                                        onChange={(event) =>
-                                          setTemplateDrafts((current) => ({
-                                            ...current,
-                                            [template.id]: {
-                                              ...draft,
-                                              scope: event.target.value
-                                            }
-                                          }))
-                                        }
-                                        className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100 focus:outline-none focus:border-cyan-500"
-                                      />
-                                      <input
-                                        value={draft.subcontractor}
-                                        onChange={(event) =>
-                                          setTemplateDrafts((current) => ({
-                                            ...current,
-                                            [template.id]: {
-                                              ...draft,
-                                              subcontractor: event.target.value
-                                            }
-                                          }))
-                                        }
-                                        className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100 focus:outline-none focus:border-cyan-500"
-                                      />
-                                      <input
-                                        type="number"
-                                        min="1"
-                                        value={draft.default_days}
-                                        onChange={(event) =>
-                                          setTemplateDrafts((current) => ({
-                                            ...current,
-                                            [template.id]: {
-                                              ...draft,
-                                              default_days: Math.max(1, Number(event.target.value) || 1)
-                                            }
-                                          }))
-                                        }
-                                        className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100 focus:outline-none focus:border-cyan-500"
-                                      />
-                                      <input
-                                        value={draft.bottleneck_vendor}
-                                        onChange={(event) =>
-                                          setTemplateDrafts((current) => ({
-                                            ...current,
-                                            [template.id]: {
-                                              ...draft,
-                                              bottleneck_vendor: event.target.value
-                                            }
-                                          }))
-                                        }
-                                        className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100 focus:outline-none focus:border-cyan-500"
-                                      />
-                                      <button
-                                        disabled={!dirty || !draft.scope.trim() || !!busyLabel}
-                                        onClick={() =>
-                                          runAction(`Saved scope "${draft.scope.trim()}"`, async () => {
-                                            await updateTaskTemplate(template.id, {
-                                              ...draft,
-                                              subcontractor: draft.subcontractor.trim() || null,
-                                              bottleneck_vendor: draft.bottleneck_vendor.trim() || null
-                                            });
-                                          })
-                                        }
-                                        className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 font-medium text-emerald-200 hover:bg-emerald-500/15 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center justify-center gap-2"
-                                      >
-                                        <Save size={16} />
-                                        Save
-                                      </button>
-                                      <button
-                                        disabled={!!busyLabel}
-                                        onClick={() => {
-                                          if (!confirm(`Delete scope template "${template.scope}"? Existing project scopes will remain as-is.`)) return;
-                                          runAction(`Deleted scope "${template.scope}"`, async () => {
-                                            await deleteTaskTemplate(template.id);
-                                          });
-                                        }}
-                                        className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 font-medium text-red-200 hover:bg-red-500/15 disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center justify-center gap-2"
-                                      >
-                                        <Trash2 size={16} />
-                                        Delete
-                                      </button>
+                                            setTemplateDrafts((current) => ({
+                                              ...current,
+                                              [template.id]: { ...template.draft, scope: event.target.value }
+                                            }));
+                                          }}
+                                          className="w-full rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100 focus:outline-none focus:border-cyan-500"
+                                        />
+                                        {template.isNew && (
+                                          <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-cyan-200">
+                                            New
+                                          </span>
+                                        )}
+                                      </div>
                                     </div>
+                                    <input
+                                      value={template.draft.subcontractor}
+                                      onChange={(event) => {
+                                        const nextSubcontractor = event.target.value;
+                                        if (template.isNew) {
+                                          setPendingTemplateCreates((current) =>
+                                            current.map((item) =>
+                                              item.localId === template.id
+                                                ? {
+                                                    ...item,
+                                                    subcontractor: nextSubcontractor,
+                                                    bottleneck_vendor: syncBottleneckVendor(item.bottleneck_vendor, nextSubcontractor)
+                                                  }
+                                                : item
+                                            )
+                                          );
+                                          return;
+                                        }
+                                        setTemplateDrafts((current) => ({
+                                          ...current,
+                                          [template.id]: {
+                                            ...template.draft,
+                                            subcontractor: nextSubcontractor,
+                                            bottleneck_vendor: syncBottleneckVendor(template.draft.bottleneck_vendor, nextSubcontractor)
+                                          }
+                                        }));
+                                      }}
+                                      className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100 focus:outline-none focus:border-cyan-500"
+                                    />
+                                    <input
+                                      type="number"
+                                      min="1"
+                                      value={template.draft.default_days}
+                                      onChange={(event) => {
+                                        const nextDays = Math.max(1, Number(event.target.value) || 1);
+                                        if (template.isNew) {
+                                          setPendingTemplateCreates((current) =>
+                                            current.map((item) => (item.localId === template.id ? { ...item, default_days: nextDays } : item))
+                                          );
+                                          return;
+                                        }
+                                        setTemplateDrafts((current) => ({
+                                          ...current,
+                                          [template.id]: { ...template.draft, default_days: nextDays }
+                                        }));
+                                      }}
+                                      className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100 focus:outline-none focus:border-cyan-500"
+                                    />
+                                    <label className="flex items-center justify-center rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm text-slate-200">
+                                      <input
+                                        type="checkbox"
+                                        checked={!!template.draft.bottleneck_vendor}
+                                        onChange={(event) => {
+                                          if (template.isNew) {
+                                            setPendingTemplateCreates((current) =>
+                                              current.map((item) =>
+                                                item.localId === template.id
+                                                  ? {
+                                                      ...item,
+                                                      bottleneck_vendor: event.target.checked ? item.subcontractor : ''
+                                                    }
+                                                  : item
+                                              )
+                                            );
+                                            return;
+                                          }
+                                          setTemplateDrafts((current) => ({
+                                            ...current,
+                                            [template.id]: {
+                                              ...template.draft,
+                                              bottleneck_vendor: event.target.checked ? template.draft.subcontractor : ''
+                                            }
+                                          }));
+                                        }}
+                                        disabled={!template.draft.subcontractor.trim()}
+                                        className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-cyan-500 focus:ring-cyan-500 focus:ring-offset-slate-900 disabled:opacity-40"
+                                      />
+                                    </label>
+                                    <button
+                                      disabled={!!busyLabel}
+                                      onClick={() => {
+                                        if (template.isNew) {
+                                          setPendingTemplateCreates((current) => current.filter((item) => item.localId !== template.id));
+                                          return;
+                                        }
+                                        if (!confirm(`Delete scope template "${template.sourceScope}" when you save this tab? Existing project scopes will remain as-is.`)) return;
+                                        setPendingTemplateDeletes((current) => [...current, template.id]);
+                                      }}
+                                      className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 font-medium text-red-200 hover:bg-red-500/15 disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center justify-center gap-2"
+                                    >
+                                      <Trash2 size={16} />
+                                      Delete
+                                    </button>
                                   </div>
-                                );
-                              })}
+                                </div>
+                              ))}
                             </div>
                           </div>
                         );
@@ -799,8 +1239,12 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
                           <div className="text-sm font-semibold text-slate-100">Unphased scopes</div>
                           <div className="text-sm text-slate-500">Scopes that are not currently tied to a phase</div>
                         </div>
-                        <div className="px-5 py-4 text-sm text-slate-400">
-                          Move these into a phase if you want them grouped visually in the gantt.
+                        <div className="divide-y divide-slate-800">
+                          {(templatesByPhase.get('unphased') ?? []).map((template) => (
+                            <div key={template.id} className="px-5 py-4 text-sm text-slate-300">
+                              {template.draft.scope || 'Untitled scope'}
+                            </div>
+                          ))}
                         </div>
                       </div>
                     )}
@@ -811,9 +1255,9 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
               {activeTab === 'dependencies' && (
                 <div className="space-y-6">
                   <div className="rounded-3xl border border-slate-800 bg-slate-950/60 p-6">
-                    <div className="text-[11px] uppercase tracking-[0.22em] text-cyan-400 font-semibold">Add a dependency</div>
+                    <div className="text-[11px] uppercase tracking-[0.22em] text-cyan-400 font-semibold">Queue a dependency</div>
                     <p className="mt-2 text-sm text-slate-400">
-                      Dependency edits sync into existing template-linked project chains. Cycles are blocked here so the engine stays schedulable.
+                      Build out all the dependency changes you want in this tab, then save once to commit them.
                     </p>
                     <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_40px_minmax(0,1fr)_160px]">
                       <select
@@ -827,14 +1271,11 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
                         className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100 focus:outline-none focus:border-cyan-500"
                       >
                         <option value="">Select predecessor</option>
-                        {templates
-                          .slice()
-                          .sort((a, b) => a.task_order - b.task_order)
-                          .map((template) => (
-                            <option key={template.id} value={template.id}>
-                              {template.scope} · {phaseNameForTemplate(template.phase_template_id)}
-                            </option>
-                          ))}
+                        {dependencyTemplateOptions.map((template) => (
+                          <option key={template.id} value={template.id}>
+                            {template.label}
+                          </option>
+                        ))}
                       </select>
                       <div className="flex items-center justify-center text-slate-500">
                         <ArrowRight size={18} />
@@ -850,14 +1291,11 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
                         className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100 focus:outline-none focus:border-cyan-500"
                       >
                         <option value="">Select successor</option>
-                        {templates
-                          .slice()
-                          .sort((a, b) => a.task_order - b.task_order)
-                          .map((template) => (
-                            <option key={template.id} value={template.id}>
-                              {template.scope} · {phaseNameForTemplate(template.phase_template_id)}
-                            </option>
-                          ))}
+                        {dependencyTemplateOptions.map((template) => (
+                          <option key={template.id} value={template.id}>
+                            {template.label}
+                          </option>
+                        ))}
                       </select>
                       <button
                         disabled={
@@ -868,12 +1306,17 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
                           dependencyCycle ||
                           !!busyLabel
                         }
-                        onClick={() =>
-                          runAction('Added dependency link', async () => {
-                            await addTemplateDependency(newDependency.predecessor_id, newDependency.successor_id);
-                            setNewDependency({ predecessor_id: '', successor_id: '' });
-                          })
-                        }
+                        onClick={() => {
+                          setPendingDependencyCreates((current) => [
+                            ...current,
+                            {
+                              localId: crypto.randomUUID(),
+                              predecessor_id: newDependency.predecessor_id,
+                              successor_id: newDependency.successor_id
+                            }
+                          ]);
+                          setNewDependency({ predecessor_id: '', successor_id: '' });
+                        }}
                         className="rounded-2xl bg-cyan-500/15 border border-cyan-500/30 px-4 py-3 font-medium text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center justify-center gap-2"
                       >
                         <Plus size={16} />
@@ -889,8 +1332,9 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
                         <div className="text-red-300">This link would create a circular dependency.</div>
                       )}
                       {!dependencyCycle && dependencyDuplicate && (
-                        <div className="text-amber-300">That dependency already exists.</div>
+                        <div className="text-amber-300">That dependency already exists in the current draft.</div>
                       )}
+                      {dependencyGraphIssue && <div className="text-red-300">{dependencyGraphIssue}</div>}
                     </div>
                   </div>
 
@@ -898,31 +1342,114 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
                     <div className="px-5 py-4 border-b border-slate-800 bg-slate-950/80 flex items-center justify-between gap-3">
                       <div>
                         <div className="text-sm font-semibold text-slate-100">Current dependency map</div>
-                        <div className="text-sm text-slate-500">Template predecessor links mirrored into active schedule data</div>
+                        <div className="text-sm text-slate-500">This list reflects queued adds and removals before you save.</div>
                       </div>
                       <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">{dependencyRows.length} links</div>
                     </div>
+                    <div className="border-b border-slate-800 bg-slate-950/60 px-5 py-3">
+                      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_40px_minmax(0,1fr)_110px]">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Predecessor</div>
+                        <div />
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Successor</div>
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Actions</div>
+                      </div>
+                    </div>
                     <div className="divide-y divide-slate-800">
                       {dependencyRows.map((dependency) => (
-                        <div key={dependency.id} className="px-5 py-4 flex items-center gap-4">
-                          <div className="min-w-0 flex-1 rounded-2xl border border-slate-800 bg-slate-900/70 px-4 py-3 text-sm text-slate-200">
-                            <span className="font-medium text-slate-100">{dependency.predecessorLabel}</span>
-                            <span className="mx-2 text-slate-500">must finish before</span>
-                            <span className="font-medium text-cyan-200">{dependency.successorLabel}</span>
+                        <div key={dependency.id} className="px-5 py-4">
+                          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_40px_minmax(0,1fr)_110px] items-center">
+                            <select
+                              value={
+                                pendingDependencyCreates.some((item) => item.localId === dependency.id)
+                                  ? dependency.predecessor_id
+                                  : dependencyDrafts[dependency.id]?.predecessor_id ?? dependency.predecessor_id
+                              }
+                              onChange={(event) => {
+                                const nextPredecessorId = event.target.value;
+                                if (pendingDependencyCreates.some((item) => item.localId === dependency.id)) {
+                                  setPendingDependencyCreates((current) =>
+                                    current.map((item) =>
+                                      item.localId === dependency.id ? { ...item, predecessor_id: nextPredecessorId } : item
+                                    )
+                                  );
+                                  return;
+                                }
+                                setDependencyDrafts((current) => ({
+                                  ...current,
+                                  [dependency.id]: {
+                                    predecessor_id: nextPredecessorId,
+                                    successor_id: current[dependency.id]?.successor_id ?? dependency.successor_id
+                                  }
+                                }));
+                              }}
+                              className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100 focus:outline-none focus:border-cyan-500"
+                            >
+                              <option value="">Select predecessor</option>
+                              {dependencyTemplateOptions.map((template) => (
+                                <option key={template.id} value={template.id}>
+                                  {template.label}
+                                </option>
+                              ))}
+                            </select>
+                            <div className="flex items-center justify-center text-slate-500">
+                              <ArrowRight size={18} />
+                            </div>
+                            <select
+                              value={
+                                pendingDependencyCreates.some((item) => item.localId === dependency.id)
+                                  ? dependency.successor_id
+                                  : dependencyDrafts[dependency.id]?.successor_id ?? dependency.successor_id
+                              }
+                              onChange={(event) => {
+                                const nextSuccessorId = event.target.value;
+                                if (pendingDependencyCreates.some((item) => item.localId === dependency.id)) {
+                                  setPendingDependencyCreates((current) =>
+                                    current.map((item) =>
+                                      item.localId === dependency.id ? { ...item, successor_id: nextSuccessorId } : item
+                                    )
+                                  );
+                                  return;
+                                }
+                                setDependencyDrafts((current) => ({
+                                  ...current,
+                                  [dependency.id]: {
+                                    predecessor_id: current[dependency.id]?.predecessor_id ?? dependency.predecessor_id,
+                                    successor_id: nextSuccessorId
+                                  }
+                                }));
+                              }}
+                              className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100 focus:outline-none focus:border-cyan-500"
+                            >
+                              <option value="">Select successor</option>
+                              {dependencyTemplateOptions.map((template) => (
+                                <option key={template.id} value={template.id}>
+                                  {template.label}
+                                </option>
+                              ))}
+                            </select>
+                            <div className="flex items-center justify-end gap-2">
+                              {pendingDependencyCreates.some((item) => item.localId === dependency.id) && (
+                                <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-cyan-200">
+                                  New
+                                </span>
+                              )}
+                              <button
+                                disabled={!!busyLabel}
+                                onClick={() => {
+                                  if (pendingDependencyCreates.some((item) => item.localId === dependency.id)) {
+                                    setPendingDependencyCreates((current) => current.filter((item) => item.localId !== dependency.id));
+                                    return;
+                                  }
+                                  if (!confirm(`Remove dependency from "${dependency.predecessorLabel}" to "${dependency.successorLabel}" when you save this tab?`)) return;
+                                  setPendingDependencyDeletes((current) => [...current, dependency.id]);
+                                }}
+                                className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 font-medium text-red-200 hover:bg-red-500/15 disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center justify-center gap-2"
+                              >
+                                <Trash2 size={16} />
+                                Remove
+                              </button>
+                            </div>
                           </div>
-                          <button
-                            disabled={!!busyLabel}
-                            onClick={() => {
-                              if (!confirm(`Remove dependency from "${dependency.predecessorLabel}" to "${dependency.successorLabel}"?`)) return;
-                              runAction('Removed dependency link', async () => {
-                                await removeTemplateDependency(dependency.id);
-                              });
-                            }}
-                            className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 font-medium text-red-200 hover:bg-red-500/15 disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center justify-center gap-2"
-                          >
-                            <Trash2 size={16} />
-                            Remove
-                          </button>
                         </div>
                       ))}
                     </div>
@@ -930,6 +1457,30 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
                 </div>
               )}
             </div>
+            {activeTabMeta && (
+              <div className="border-t border-slate-800 bg-slate-950/80 px-6 py-4 flex items-center justify-between gap-4">
+                <div className="text-sm text-slate-400">
+                  {activeTabMeta.hasChanges ? activeTabMeta.summary : 'No unsaved changes in this tab.'}
+                </div>
+                <div className="flex items-center gap-3">
+                  <button
+                    disabled={!activeTabMeta.hasChanges || !!busyLabel}
+                    onClick={activeTabMeta.onReset}
+                    className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm font-medium text-slate-200 hover:border-slate-600 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                  >
+                    Reset Tab
+                  </button>
+                  <button
+                    disabled={activeTabMeta.saveDisabled}
+                    onClick={activeTabMeta.onSave}
+                    className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm font-medium text-emerald-200 hover:bg-emerald-500/15 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center gap-2"
+                  >
+                    <Save size={16} />
+                    Save {STUDIO_TABS.find((tab) => tab.id === activeTab)?.label}
+                  </button>
+                </div>
+              </div>
+            )}
           </section>
         </div>
       </div>
