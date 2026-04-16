@@ -1,7 +1,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { differenceInDays, addDays, endOfWeek, format, isWeekend, startOfWeek, parseISO } from 'date-fns';
 import { clsx } from 'clsx';
-import { AlertTriangle, ChevronDown, ChevronRight, Lightbulb, LightbulbOff, Pencil } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ChevronRight, ChevronsDown, ChevronsRight, Lightbulb, LightbulbOff, Pencil } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { useProjectStore } from '../store/projectStore';
 import type { EngineTask } from '../utils/schedulingEngine';
@@ -12,6 +12,7 @@ type GanttChartViewState = {
   version: 1;
   zoomLevel: ZoomLevel;
   leftPanelWidth: number;
+  visibleProjectPhases: PersistedVisibilityMap;
   expandedPhases: Record<string, boolean>;
   hiddenProjectBars: PersistedVisibilityMap;
   hiddenPhaseBars: PersistedVisibilityMap;
@@ -136,6 +137,7 @@ const readPersistedChartViewState = (): GanttChartViewState => {
       version: 1,
       zoomLevel: 'day',
       leftPanelWidth: 272,
+      visibleProjectPhases: {},
       expandedPhases: {},
       hiddenProjectBars: {},
       hiddenPhaseBars: {},
@@ -154,6 +156,7 @@ const readPersistedChartViewState = (): GanttChartViewState => {
         version: 1,
         zoomLevel: 'day',
         leftPanelWidth: 272,
+        visibleProjectPhases: {},
         expandedPhases: {},
         hiddenProjectBars: fallbackHiddenProjectBars,
         hiddenPhaseBars: fallbackHiddenPhaseBars,
@@ -163,6 +166,14 @@ const readPersistedChartViewState = (): GanttChartViewState => {
     }
 
     const parsed = JSON.parse(rawValue) as Partial<GanttChartViewState> | null;
+    const visibleProjectPhases =
+      parsed?.visibleProjectPhases && typeof parsed.visibleProjectPhases === 'object' && !Array.isArray(parsed.visibleProjectPhases)
+        ? Object.fromEntries(
+            Object.entries(parsed.visibleProjectPhases).filter(
+              (entry): entry is [string, boolean] => typeof entry[0] === 'string' && typeof entry[1] === 'boolean'
+            )
+          )
+        : {};
     const expandedPhases =
       parsed?.expandedPhases && typeof parsed.expandedPhases === 'object' && !Array.isArray(parsed.expandedPhases)
         ? Object.fromEntries(
@@ -179,6 +190,7 @@ const readPersistedChartViewState = (): GanttChartViewState => {
         typeof parsed?.leftPanelWidth === 'number' && Number.isFinite(parsed.leftPanelWidth)
           ? Math.max(200, Math.min(520, parsed.leftPanelWidth))
           : 272,
+      visibleProjectPhases,
       expandedPhases,
       hiddenProjectBars:
         parsed?.hiddenProjectBars && typeof parsed.hiddenProjectBars === 'object' && !Array.isArray(parsed.hiddenProjectBars)
@@ -206,6 +218,7 @@ const readPersistedChartViewState = (): GanttChartViewState => {
       version: 1,
       zoomLevel: 'day',
       leftPanelWidth: 272,
+      visibleProjectPhases: {},
       expandedPhases: {},
       hiddenProjectBars: fallbackHiddenProjectBars,
       hiddenPhaseBars: fallbackHiddenPhaseBars,
@@ -246,6 +259,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
   const [persistedViewState] = useState(readPersistedChartViewState);
   const [zoomLevel, setZoomLevel] = useState<ZoomLevel>(persistedViewState.zoomLevel);
   const [leftPanelWidth, setLeftPanelWidth] = useState(persistedViewState.leftPanelWidth);
+  const [visibleProjectPhases, setVisibleProjectPhases] = useState<Record<string, boolean>>(persistedViewState.visibleProjectPhases);
   const [expandedPhases, setExpandedPhases] = useState<Record<string, boolean>>(persistedViewState.expandedPhases);
   const [hiddenProjectBars, setHiddenProjectBars] = useState<Record<string, boolean>>(persistedViewState.hiddenProjectBars);
   const [hiddenPhaseBars, setHiddenPhaseBars] = useState<Record<string, boolean>>(persistedViewState.hiddenPhaseBars);
@@ -279,6 +293,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
     const tasksByProject = new Map<string, EngineTask[]>();
     const phaseIdsByProject = new Map<string, string[]>();
     const projectHasCollapsedPhase = new Map<string, boolean>();
+    const projectShowsPhases = new Map<string, boolean>();
     const projectPhasesByProject = new Map<string, { id: string; name: string; order: number }[]>();
 
     projectPhases.forEach((phase) => {
@@ -345,6 +360,9 @@ export const GanttChart = forwardRef<GanttChartHandle, {
         if (a[1].order !== b[1].order) return a[1].order - b[1].order;
         return a[1].name.localeCompare(b[1].name);
       });
+      const phasesVisible = visibleProjectPhases[project.id] ?? false;
+
+      projectShowsPhases.set(project.id, phasesVisible);
 
       orderedPhases.forEach(([phaseId, meta]) => {
         const phaseTasks = phaseTaskBuckets.get(phaseId);
@@ -360,8 +378,9 @@ export const GanttChart = forwardRef<GanttChartHandle, {
           if (task.calculated_finish! > phaseFinish) phaseFinish = task.calculated_finish!;
         });
 
-        const expanded = expandedPhases[phaseId] ?? true;
+        const expanded = expandedPhases[phaseId] ?? false;
         if (!expanded) projectHasCollapsedPhase.set(project.id, true);
+        if (!phasesVisible) return;
 
         rows.push({
           kind: 'phase',
@@ -404,10 +423,10 @@ export const GanttChart = forwardRef<GanttChartHandle, {
       phaseIdsByProject.set(project.id, projectPhaseIds);
     });
 
-    return { chartRows: rows, phaseIdsByProject, projectHasCollapsedPhase };
-  }, [expandedPhases, projectPhases, projects, visibleTasks]);
+    return { chartRows: rows, phaseIdsByProject, projectHasCollapsedPhase, projectShowsPhases };
+  }, [expandedPhases, projectPhases, projects, visibleProjectPhases, visibleTasks]);
 
-  const { chartRows, phaseIdsByProject, projectHasCollapsedPhase } = chartMeta;
+  const { chartRows, phaseIdsByProject, projectHasCollapsedPhase, projectShowsPhases } = chartMeta;
   const allPhaseIds = useMemo(() => Array.from(phaseIdsByProject.values()).flat(), [phaseIdsByProject]);
   const visibleProjectIds = useMemo(() => Array.from(phaseIdsByProject.keys()), [phaseIdsByProject]);
   const allProjectIds = useMemo(() => projects.map((project) => project.id), [projects]);
@@ -669,6 +688,11 @@ export const GanttChart = forwardRef<GanttChartHandle, {
   useEffect(() => {
     const validProjectIds = new Set(allProjectIds);
 
+    setVisibleProjectPhases((current) => {
+      const next = Object.fromEntries(Object.entries(current).filter(([projectId]) => validProjectIds.has(projectId)));
+      return Object.keys(next).length === Object.keys(current).length ? current : next;
+    });
+
     setHiddenProjectBars((current) => {
       const next = Object.fromEntries(Object.entries(current).filter(([projectId]) => validProjectIds.has(projectId)));
       return Object.keys(next).length === Object.keys(current).length ? current : next;
@@ -691,6 +715,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
         version: 1,
         zoomLevel,
         leftPanelWidth,
+        visibleProjectPhases,
         expandedPhases,
         hiddenProjectBars,
         hiddenPhaseBars,
@@ -698,7 +723,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
         scrollLeft
       } satisfies GanttChartViewState)
     );
-  }, [expandedPhases, hiddenPhaseBars, hiddenProjectBars, leftPanelWidth, scrollLeft, scrollTop, zoomLevel]);
+  }, [expandedPhases, hiddenPhaseBars, hiddenProjectBars, leftPanelWidth, scrollLeft, scrollTop, visibleProjectPhases, zoomLevel]);
 
   const captureZoomFocus = () => {
     const mainScroll = mainScrollRef.current;
@@ -709,14 +734,21 @@ export const GanttChart = forwardRef<GanttChartHandle, {
   };
 
   const togglePhase = (phaseId: string) => {
-    setExpandedPhases((prev) => ({ ...prev, [phaseId]: !(prev[phaseId] ?? true) }));
+    setExpandedPhases((prev) => ({ ...prev, [phaseId]: !(prev[phaseId] ?? false) }));
+  };
+
+  const toggleProjectPhaseVisibility = (projectId: string) => {
+    setVisibleProjectPhases((prev) => ({
+      ...prev,
+      [projectId]: !(prev[projectId] ?? false)
+    }));
   };
 
   const toggleProjectPhases = (projectId: string) => {
     const phaseIds = phaseIdsByProject.get(projectId) ?? [];
     if (phaseIds.length === 0) return;
 
-    const shouldExpand = phaseIds.some((phaseId) => !(expandedPhases[phaseId] ?? true));
+    const shouldExpand = phaseIds.some((phaseId) => !(expandedPhases[phaseId] ?? false));
 
     setExpandedPhases((prev) => {
       const next = { ...prev };
@@ -745,6 +777,21 @@ export const GanttChart = forwardRef<GanttChartHandle, {
         return next;
       });
     }
+  };
+
+  const toggleProjectPhaseBars = (projectId: string) => {
+    const projectPhaseIds = phaseIdsByProject.get(projectId) ?? [];
+    if (projectPhaseIds.length === 0) return;
+
+    const shouldHide = projectPhaseIds.some((phaseId) => !(hiddenPhaseBars[phaseId] ?? false));
+
+    setHiddenPhaseBars((current) => {
+      const next = { ...current };
+      projectPhaseIds.forEach((phaseId) => {
+        next[phaseId] = shouldHide;
+      });
+      return next;
+    });
   };
 
   const togglePhaseBarVisibility = (phaseId: string) => {
@@ -793,15 +840,49 @@ export const GanttChart = forwardRef<GanttChartHandle, {
     });
   };
 
-  const toggleAllPhases = () => {
-    if (allPhaseIds.length === 0) return;
+  const collapseToProjectRows = () => {
+    if (visibleProjectIds.length === 0) return;
 
-    const shouldExpand = allPhaseIds.some((phaseId) => !(expandedPhases[phaseId] ?? true));
+    setVisibleProjectPhases((prev) => {
+      const next = { ...prev };
+      visibleProjectIds.forEach((projectId) => {
+        next[projectId] = false;
+      });
+      return next;
+    });
+  };
+
+  const areAllVisibleProjectPhasesShown =
+    visibleProjectIds.length > 0 && visibleProjectIds.every((projectId) => visibleProjectPhases[projectId] ?? false);
+  const areAllVisiblePhasesExpanded = allPhaseIds.length > 0 && allPhaseIds.every((phaseId) => expandedPhases[phaseId] ?? false);
+  const isAllDetailExpanded = areAllVisibleProjectPhasesShown && areAllVisiblePhasesExpanded;
+
+  const toggleAllProjectDetails = () => {
+    if (visibleProjectIds.length === 0) return;
+
+    if (isAllDetailExpanded) {
+      setExpandedPhases((prev) => {
+        const next = { ...prev };
+        allPhaseIds.forEach((phaseId) => {
+          next[phaseId] = false;
+        });
+        return next;
+      });
+      return;
+    }
+
+    setVisibleProjectPhases((prev) => {
+      const next = { ...prev };
+      visibleProjectIds.forEach((projectId) => {
+        next[projectId] = true;
+      });
+      return next;
+    });
 
     setExpandedPhases((prev) => {
       const next = { ...prev };
       allPhaseIds.forEach((phaseId) => {
-        next[phaseId] = shouldExpand;
+        next[phaseId] = true;
       });
       return next;
     });
@@ -896,7 +977,23 @@ export const GanttChart = forwardRef<GanttChartHandle, {
             style={{ height: headerHeight }}
             className="border-b border-slate-700 flex items-end justify-between gap-2 pb-2 px-3 text-[11px] font-semibold text-slate-400 uppercase tracking-[0.16em] bg-slate-900/98 w-full z-10 sticky top-0"
           >
-            <div className="min-w-0 truncate">Project / Phase / Scope</div>
+            <div className="min-w-0 flex items-center gap-1.5">
+              <button
+                onClick={collapseToProjectRows}
+                className="p-1 rounded text-cyan-400 hover:bg-slate-700/70 hover:text-cyan-300 transition flex-shrink-0"
+                title="Roll everything up to project rows only"
+              >
+                <ChevronRight size={14} />
+              </button>
+              <button
+                onClick={toggleAllProjectDetails}
+                className="p-1 rounded text-cyan-400 hover:bg-slate-700/70 hover:text-cyan-300 transition flex-shrink-0"
+                title={isAllDetailExpanded ? 'Collapse all visible scopes back to phase rows' : 'Show all phase rows and expand all scopes'}
+              >
+                {isAllDetailExpanded ? <ChevronsRight size={14} /> : <ChevronsDown size={14} />}
+              </button>
+              <div className="min-w-0 truncate">Project / Phase / Scope</div>
+            </div>
             <div className="flex items-center gap-1.5 flex-shrink-0">
               <button
                 onClick={toggleAllProjectBars}
@@ -922,17 +1019,6 @@ export const GanttChart = forwardRef<GanttChartHandle, {
               >
                 {allPhaseIds.some((phaseId) => !(hiddenPhaseBars[phaseId] ?? false)) ? <Lightbulb size={14} /> : <LightbulbOff size={14} />}
               </button>
-              <button
-                onClick={toggleAllPhases}
-                className="p-1 rounded text-cyan-400 hover:bg-slate-700/70 hover:text-cyan-300 transition"
-                title="Expand or collapse all phases in the workspace"
-              >
-                {allPhaseIds.length > 0 && allPhaseIds.some((phaseId) => !(expandedPhases[phaseId] ?? true)) ? (
-                  <ChevronRight size={14} />
-                ) : (
-                  <ChevronDown size={14} />
-                )}
-              </button>
             </div>
           </div>
 
@@ -942,7 +1028,12 @@ export const GanttChart = forwardRef<GanttChartHandle, {
             const isPhaseSticky = activePhaseMetric?.row.key === row.key;
 
             if (row.kind === 'project') {
+              const projectPhasesVisible = projectShowsPhases.get(row.projectId) ?? false;
+              const projectScopesExpanded = !projectHasCollapsedPhase.get(row.projectId);
               const projectBarVisible = !hiddenProjectBars[row.projectId];
+              const projectPhaseIds = phaseIdsByProject.get(row.projectId) ?? [];
+              const projectPhaseBarsVisible =
+                projectPhaseIds.length > 0 && projectPhaseIds.some((phaseId) => !(hiddenPhaseBars[phaseId] ?? false));
 
               return (
                 <div
@@ -952,40 +1043,78 @@ export const GanttChart = forwardRef<GanttChartHandle, {
                     top: isProjectSticky ? headerHeight + projectOffset : undefined
                   }}
                   className={clsx(
-                    'px-3 flex items-center justify-between border-b border-slate-700/50 bg-gradient-to-r from-cyan-600/90 to-blue-600/90 transition-colors',
+                    'px-3 flex items-center justify-between border-b border-slate-700/50 bg-cyan-600/90 transition-colors',
                     isProjectSticky ? 'sticky z-30 shadow-[0_6px_18px_rgba(2,6,23,0.35)]' : 'z-10'
                   )}
                 >
                   <div className="min-w-0 flex items-center gap-2">
                     <button
-                      onClick={() => toggleProjectPhases(row.projectId)}
-                      className="p-1 rounded text-cyan-400 hover:bg-slate-700/70 hover:text-cyan-300 transition flex-shrink-0"
-                      title="Expand or collapse all phases in this project"
+                      onClick={() => toggleProjectPhaseVisibility(row.projectId)}
+                      className="p-1 rounded text-white/90 hover:bg-slate-700/70 hover:text-white transition flex-shrink-0"
+                      title={projectPhasesVisible ? 'Roll this project up to the project row only' : 'Show this project phase rows'}
                     >
-                      {projectHasCollapsedPhase.get(row.projectId) ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+                      {projectPhasesVisible ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                    </button>
+                    <button
+                      onClick={() => toggleProjectPhases(row.projectId)}
+                      disabled={!projectPhasesVisible}
+                      className={clsx(
+                        'p-1 rounded transition flex-shrink-0',
+                        projectPhasesVisible
+                          ? 'text-white/90 hover:bg-slate-700/70 hover:text-white'
+                          : 'text-slate-500 cursor-not-allowed'
+                      )}
+                      title={
+                        projectPhasesVisible
+                          ? 'Expand or collapse all scopes inside this project phases'
+                          : 'Show this project phase rows before expanding scopes'
+                      }
+                    >
+                      {projectScopesExpanded ? <ChevronsDown size={14} /> : <ChevronsRight size={14} />}
                     </button>
                     <div className="text-[13px] font-bold text-slate-100 truncate">{row.label}</div>
-                    <div className="text-[9px] uppercase tracking-[0.18em] text-slate-500 flex-shrink-0">{row.taskCount} scopes</div>
+                    <div className="text-[9px] uppercase tracking-[0.18em] text-white/85 flex-shrink-0">{row.taskCount} scopes</div>
                   </div>
                   <div className="flex items-center gap-1 ml-2">
+                    <button
+                      onClick={() => onEditProject(row.projectId)}
+                      className="text-white/80 hover:text-white transition p-1 rounded hover:bg-slate-700/70"
+                      title={`Edit ${row.label}`}
+                    >
+                      <Pencil size={14} />
+                    </button>
                     <button
                       onClick={() => toggleProjectBarVisibility(row.projectId)}
                       className={clsx(
                         'p-1 rounded transition',
                         projectBarVisible
-                          ? 'text-amber-300 hover:text-amber-200 hover:bg-slate-700/70'
-                          : 'text-slate-500 hover:text-slate-300 hover:bg-slate-700/70'
+                          ? 'text-white/90 hover:text-white hover:bg-slate-700/70'
+                          : 'text-white/50 hover:text-white/80 hover:bg-slate-700/70'
                       )}
                       title={projectBarVisible ? 'Hide project summary bar' : 'Show project summary bar'}
                     >
                       {projectBarVisible ? <Lightbulb size={14} /> : <LightbulbOff size={14} />}
                     </button>
                     <button
-                      onClick={() => onEditProject(row.projectId)}
-                      className="text-slate-400 hover:text-cyan-300 transition p-1 rounded hover:bg-slate-700/70"
-                      title={`Edit ${row.label}`}
+                      onClick={() => toggleProjectPhaseBars(row.projectId)}
+                      disabled={projectPhaseIds.length === 0}
+                      className={clsx(
+                        'p-1 rounded transition',
+                        projectPhaseIds.length === 0
+                          ? 'text-white/40 cursor-not-allowed'
+                          : projectPhaseBarsVisible
+                            ? 'text-white/90 hover:text-white hover:bg-slate-700/70'
+                            : 'text-white/50 hover:text-white/80 hover:bg-slate-700/70'
+                      )}
+                      title={
+                        projectPhaseIds.length === 0
+                          ? 'No phase summary bars available for this project'
+                          : projectPhaseBarsVisible
+                            ? 'Hide all phase summary bars for this project'
+                            : 'Show all phase summary bars for this project'
+                      }
                     >
-                      <Pencil size={14} />
+                      {projectPhaseBarsVisible ? <Lightbulb size={14} /> : <LightbulbOff size={14} />}
                     </button>
                   </div>
                 </div>
