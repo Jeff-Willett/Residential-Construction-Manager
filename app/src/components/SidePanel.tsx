@@ -102,26 +102,53 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
     .filter((item): item is { dependency: typeof dependencies[number]; successor: EngineTask } => Boolean(item.successor))
     .sort((a, b) => a.successor.name.localeCompare(b.successor.name));
   const latestPred = [...predecessors].sort((a,b) => (b.calculated_finish || '').localeCompare(a.calculated_finish || ''))[0];
-  const hasLogicConflict = ((task.logic_violation_days || 0) > 0 || (task.lag || 0) < 0) && latestPred;
+  const hasLogicConflict = (task.logic_violation_days || 0) > 0 && latestPred;
+  const hasAcceptedLogicOverride = Boolean(task.manual_start) && (task.lag || 0) < 0 && (task.logic_violation_days || 0) === 0 && latestPred;
   const acceptedLag = (task.lag || 0) + (task.delay_days || 0);
   const hasVendorCollision = (task.delay_days || 0) > 0 && Boolean(task.bottleneck_vendor) && Boolean(task.delay_cause_task_id || task.delay_cause_task_name);
+  const acceptedLogicOffsetDays =
+    task.logic_start && task.calculated_start ? Math.abs(getWorkingDaysDiff(task.logic_start, task.calculated_start)) : Math.abs(task.lag || 0);
 
-  const handleSave = async () => {
-    const dur = parseInt(durationInput, 10);
-    let finalLag = task.lag;
-    if (startDateStr && startDateStr !== task.calculated_start) {
-        const baseDate = task.logic_start || task.calculated_start || '';
-        const dateDrift = getWorkingDaysDiff(baseDate, startDateStr);
-        finalLag = task.lag + dateDrift;
+  const getFollowingSuccessorIds = () => {
+    const visited = new Set<string>();
+    const queue = [task.id];
+
+    while (queue.length > 0) {
+      const currentTaskId = queue.shift()!;
+      const nextDependencies = dependencies.filter(
+        (dependency) => dependency.predecessor_id === currentTaskId && dependency.follow_predecessor_changes !== false
+      );
+
+      nextDependencies.forEach((dependency) => {
+        if (visited.has(dependency.successor_id)) return;
+        visited.add(dependency.successor_id);
+        queue.push(dependency.successor_id);
+      });
     }
 
-    const normalizedManualStart = startDateStr || null;
-    const normalizedManualFinish = finishDateStr || null;
+    return Array.from(visited);
+  };
+
+  const applyTaskScheduleChanges = async ({
+    duration,
+    lag,
+    subcontractor,
+    bottleneckVendor,
+    manualStart,
+    manualFinish
+  }: {
+    duration?: number;
+    lag: number;
+    subcontractor: string | null;
+    bottleneckVendor: string | null;
+    manualStart: string | null;
+    manualFinish: string | null;
+  }) => {
     const hasScheduleChanges =
-      (!isNaN(dur) && dur > 0 ? dur !== task.duration : false) ||
-      finalLag !== task.lag ||
-      normalizedManualStart !== (task.manual_start ?? null) ||
-      normalizedManualFinish !== (task.manual_finish ?? null);
+      (duration !== undefined ? duration !== task.duration : false) ||
+      lag !== task.lag ||
+      manualStart !== (task.manual_start ?? null) ||
+      manualFinish !== (task.manual_finish ?? null);
 
     const frozenSuccessors = hasScheduleChanges
       ? downstreamDependencies
@@ -134,18 +161,67 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
       : [];
 
     await updateTaskFields(task.id, {
-      duration: !isNaN(dur) && dur > 0 ? dur : undefined,
-      lag: finalLag,
-      subcontractor: vendorInput || null,
-      bottleneck_vendor: isResourceConstrained && vendorInput ? vendorInput : null,
-      manual_start: normalizedManualStart,
-      manual_finish: normalizedManualFinish
+      duration,
+      lag,
+      subcontractor,
+      bottleneck_vendor: bottleneckVendor,
+      manual_start: manualStart,
+      manual_finish: manualFinish
     });
 
     for (const successor of frozenSuccessors) {
       await updateTaskFields(successor.taskId, {
         manual_start: successor.manual_start,
         manual_finish: successor.manual_finish
+      });
+    }
+  };
+
+  const handleSave = async () => {
+    const dur = parseInt(durationInput, 10);
+    let finalLag = task.lag;
+    if (startDateStr && startDateStr !== task.calculated_start) {
+        const baseDate = task.logic_start || task.calculated_start || '';
+        const dateDrift = getWorkingDaysDiff(baseDate, startDateStr);
+        finalLag = task.lag + dateDrift;
+    }
+
+    const normalizedManualStart = startDateStr || null;
+    const normalizedManualFinish = finishDateStr || null;
+    await applyTaskScheduleChanges({
+      duration: !isNaN(dur) && dur > 0 ? dur : undefined,
+      lag: finalLag,
+      subcontractor: vendorInput || null,
+      bottleneckVendor: isResourceConstrained && vendorInput ? vendorInput : null,
+      manualStart: normalizedManualStart,
+      manualFinish: normalizedManualFinish
+    });
+  };
+
+  const handleAcceptLogicOverride = async () => {
+    const desiredStart = startDateStr || task.manual_start || task.calculated_start || null;
+    const dur = parseInt(durationInput, 10);
+    if (!task.logic_start || !desiredStart) return;
+
+    const overrideLag = getWorkingDaysDiff(task.logic_start, desiredStart);
+    await applyTaskScheduleChanges({
+      duration: !isNaN(dur) && dur > 0 ? dur : undefined,
+      lag: overrideLag,
+      subcontractor: vendorInput || null,
+      bottleneckVendor: isResourceConstrained && vendorInput ? vendorInput : null,
+      manualStart: desiredStart,
+      manualFinish: finishDateStr || task.manual_finish || task.calculated_finish || null
+    });
+
+    const followingSuccessorIds = getFollowingSuccessorIds();
+    for (const successorId of followingSuccessorIds) {
+      const successor = tasks.find((candidate) => candidate.id === successorId);
+      if (!successor) continue;
+      if (!successor.manual_start && !successor.manual_finish) continue;
+
+      await updateTaskFields(successor.id, {
+        manual_start: null,
+        manual_finish: null
       });
     }
   };
@@ -290,6 +366,21 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
              </div>
            )}
 
+           {hasAcceptedLogicOverride && (
+             <div className="mb-4 bg-emerald-500/10 border border-emerald-500/30 p-3 rounded-md flex flex-col space-y-3">
+               <div className="flex items-start space-x-2">
+                 <AlertTriangle size={16} className="text-emerald-400 mt-0.5 flex-shrink-0" />
+                 <div>
+                   <span className="text-emerald-300 font-bold text-sm tracking-wide uppercase block">Override Accepted</span>
+                   <span className="text-slate-300 text-xs mt-1 block">
+                     This task is intentionally scheduled {acceptedLogicOffsetDays} working day{acceptedLogicOffsetDays === 1 ? '' : 's'} ahead of
+                     <span className="font-bold text-white"> {latestPred.name}</span>. The active error indicators are cleared, but this note remains so the approved logic exception is still visible later.
+                   </span>
+                 </div>
+               </div>
+             </div>
+           )}
+
            {/* Logic Overlap Engine */}
            {hasLogicConflict && (
              <div className="mb-4 bg-orange-500/10 border border-orange-500/30 p-3 rounded-md flex flex-col space-y-3">
@@ -307,13 +398,22 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
                 
                 <div className="flex flex-col space-y-2 mt-2 pt-2 border-t border-orange-500/20">
                    <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Engine Solutions</span>
+                   <button
+                     onClick={() => {
+                       void handleAcceptLogicOverride();
+                     }}
+                     className="w-full text-xs font-bold py-1.5 px-3 bg-emerald-500/20 hover:bg-emerald-500/40 text-emerald-100 rounded transition border border-emerald-500/50 hover:border-emerald-400/80 shadow text-left flex justify-between items-center"
+                   >
+                     <span>1. Accept Override</span>
+                     <span className="text-[10px] text-emerald-300/80 font-normal">Respects checked downstream links</span>
+                   </button>
                    <button 
                      onClick={() => {
                        updateTaskLag(task.id, 0);
                      }}
                      className="w-full text-xs font-bold py-1.5 px-3 bg-orange-500/20 hover:bg-orange-500/40 text-orange-100 rounded transition border border-orange-500/50 hover:border-orange-400/80 shadow text-left flex justify-between items-center"
                    >
-                     <span>1. Snap to Earliest Possible Start</span>
+                     <span>2. Snap to Earliest Possible Start</span>
                      <span className="text-[10px] text-orange-300/80 font-normal">Resets Lag to 0</span>
                    </button>
                    
@@ -326,7 +426,7 @@ export function SidePanel({ task, onClose }: { task: EngineTask, onClose: () => 
                      }}
                      className="w-full text-xs font-bold py-1.5 px-3 bg-orange-500/20 hover:bg-orange-500/40 text-orange-100 rounded transition border border-orange-500/50 hover:border-orange-400/80 shadow text-left flex justify-between items-center"
                    >
-                     <span>2. Squeeze Predecessor Duration</span>
+                     <span>3. Squeeze Predecessor Duration</span>
                      <span className="text-[10px] text-orange-300/80 font-normal">Shortens {latestPred?.name}</span>
                    </button>
                 </div>
