@@ -657,7 +657,12 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       .map((dependency) => ({
         predecessor_source_task_id: dependency.predecessor_id,
         successor_source_task_id: dependency.successor_id
-      }));
+      }))
+      .filter(
+        (dependency) =>
+          retainedSourceTaskIds.has(dependency.predecessor_source_task_id) &&
+          retainedSourceTaskIds.has(dependency.successor_source_task_id)
+      );
     const createdTaskIds: string[] = [];
 
     try {
