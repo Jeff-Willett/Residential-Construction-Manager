@@ -97,6 +97,15 @@ function syncBottleneckVendor(currentBottleneckVendor: string, nextSubcontractor
   return currentBottleneckVendor ? nextSubcontractor : currentBottleneckVendor;
 }
 
+function formatDependencyTemplateLabel(template: {
+  phaseName: string;
+  phaseOrder: number;
+  scope: string;
+}) {
+  const phasePrefix = template.phaseName === 'Unphased' ? 'Unphased' : `Phase ${template.phaseOrder}: ${template.phaseName}`;
+  return `${phasePrefix} - ${template.scope}`;
+}
+
 function getDependencyGraphIssue(
   dependencies: Array<{ predecessor_id: string; successor_id: string }>
 ): string | null {
@@ -291,12 +300,17 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
     return visibleTemplates
       .slice()
       .sort((a, b) => {
+        if (a.phase_order !== b.phase_order) return a.phase_order - b.phase_order;
         if (a.task_order !== b.task_order) return a.task_order - b.task_order;
         return a.scope.localeCompare(b.scope);
       })
       .map((template) => ({
         id: template.id,
-        label: `${template.scope} · ${template.phase_template_id ? phaseNameById.get(template.phase_template_id) ?? 'Unphased' : 'Unphased'}`
+        label: formatDependencyTemplateLabel({
+          phaseName: template.phase_template_id ? phaseNameById.get(template.phase_template_id) ?? 'Unphased' : 'Unphased',
+          phaseOrder: template.phase_order,
+          scope: template.scope
+        })
       }));
   }, [phaseNameById, visibleTemplates]);
 
@@ -347,8 +361,19 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
   }, [displayedTemplateRows]);
 
   const templateLabelById = useMemo(() => {
-    return new Map(displayedTemplateRows.map((template) => [template.id, template.draft.scope]));
-  }, [displayedTemplateRows]);
+    return new Map(
+      displayedTemplateRows.map((template) => [
+        template.id,
+        formatDependencyTemplateLabel({
+          phaseName: template.draft.phase_template_id
+            ? phaseNameById.get(template.draft.phase_template_id) ?? 'Unphased'
+            : 'Unphased',
+          phaseOrder: template.phaseOrder,
+          scope: template.draft.scope || 'Untitled scope'
+        })
+      ])
+    );
+  }, [displayedTemplateRows, phaseNameById]);
 
   const templatesByPhase = useMemo(() => {
     const buckets = new Map<string, typeof displayedTemplateRows>();
@@ -392,13 +417,33 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
       .map((dependency) => ({
         ...dependency,
         predecessorLabel: templateLabelById.get(dependency.predecessor_id) ?? 'Unknown scope',
-        successorLabel: templateLabelById.get(dependency.successor_id) ?? 'Unknown scope'
+        successorLabel: templateLabelById.get(dependency.successor_id) ?? 'Unknown scope',
+        predecessorTemplate: displayedTemplateRows.find((template) => template.id === dependency.predecessor_id) ?? null,
+        successorTemplate: displayedTemplateRows.find((template) => template.id === dependency.successor_id) ?? null
       }))
       .sort((a, b) => {
+        const successorPhaseDelta = (a.successorTemplate?.phaseOrder ?? Number.MAX_SAFE_INTEGER) - (b.successorTemplate?.phaseOrder ?? Number.MAX_SAFE_INTEGER);
+        if (successorPhaseDelta !== 0) return successorPhaseDelta;
+
+        const successorTaskDelta =
+          (a.successorTemplate?.draft.task_order ?? Number.MAX_SAFE_INTEGER) -
+          (b.successorTemplate?.draft.task_order ?? Number.MAX_SAFE_INTEGER);
+        if (successorTaskDelta !== 0) return successorTaskDelta;
+
+        const predecessorPhaseDelta =
+          (a.predecessorTemplate?.phaseOrder ?? Number.MAX_SAFE_INTEGER) -
+          (b.predecessorTemplate?.phaseOrder ?? Number.MAX_SAFE_INTEGER);
+        if (predecessorPhaseDelta !== 0) return predecessorPhaseDelta;
+
+        const predecessorTaskDelta =
+          (a.predecessorTemplate?.draft.task_order ?? Number.MAX_SAFE_INTEGER) -
+          (b.predecessorTemplate?.draft.task_order ?? Number.MAX_SAFE_INTEGER);
+        if (predecessorTaskDelta !== 0) return predecessorTaskDelta;
+
         if (a.successorLabel !== b.successorLabel) return a.successorLabel.localeCompare(b.successorLabel);
         return a.predecessorLabel.localeCompare(b.predecessorLabel);
       });
-  }, [effectiveDependencies, templateLabelById]);
+  }, [displayedTemplateRows, effectiveDependencies, templateLabelById]);
 
   const liveTemplateCount = useMemo(() => {
     return new Set(tasks.map((task) => task.template_id).filter(Boolean)).size;
