@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { useProjectStore } from './store/projectStore';
+import { useProjectStore, type ActiveFilters } from './store/projectStore';
 import { GanttChart, type GanttChartHandle } from './components/GanttChart';
 import { SidePanel } from './components/SidePanel';
 import { VendorColorModal } from './components/VendorColorModal';
@@ -12,6 +12,16 @@ import { useShallow } from 'zustand/react/shallow';
 const APP_VERSION = __APP_VERSION__;
 const APP_BRANCH = __GIT_BRANCH__;
 const APP_COMMIT = __GIT_COMMIT__;
+const CHART_VIEW_STATE_STORAGE_KEY = 'gantt:view-state';
+const HOME_FILTERS: ActiveFilters = { projects: [], vendors: [], scopes: [] };
+
+type ViewModal = 'settings' | 'filter' | 'template' | 'add-project' | 'edit-project';
+type UrlViewState = {
+  selectedTaskId: string | null;
+  editingProjectId: string | null;
+  modal: ViewModal | null;
+  filters: ActiveFilters;
+};
 
 const getEnvironmentLabel = () => {
   if (import.meta.env.DEV) return 'local testing';
@@ -19,8 +29,47 @@ const getEnvironmentLabel = () => {
   return 'preview testing';
 };
 
+const parseUrlViewState = (): UrlViewState => {
+  if (typeof window === 'undefined') {
+    return { selectedTaskId: null, editingProjectId: null, modal: null, filters: HOME_FILTERS };
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  const modal = params.get('modal');
+  const allowedModals: ViewModal[] = ['settings', 'filter', 'template', 'add-project', 'edit-project'];
+
+  return {
+    selectedTaskId: params.get('task'),
+    editingProjectId: params.get('project'),
+    modal: allowedModals.includes(modal as ViewModal) ? (modal as ViewModal) : null,
+    filters: {
+      projects: params.getAll('filterProject'),
+      vendors: params.getAll('filterVendor'),
+      scopes: params.getAll('filterScope')
+    }
+  };
+};
+
+const writeUrlViewState = ({ selectedTaskId, editingProjectId, modal, filters }: UrlViewState) => {
+  if (typeof window === 'undefined') return;
+
+  const params = new URLSearchParams();
+
+  if (selectedTaskId) params.set('task', selectedTaskId);
+  if (modal) params.set('modal', modal);
+  if (modal === 'edit-project' && editingProjectId) params.set('project', editingProjectId);
+
+  filters.projects.forEach((projectId) => params.append('filterProject', projectId));
+  filters.vendors.forEach((vendor) => params.append('filterVendor', vendor));
+  filters.scopes.forEach((scope) => params.append('filterScope', scope));
+
+  const nextSearch = params.toString();
+  const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`;
+  window.history.replaceState(null, '', nextUrl);
+};
+
 function App() {
-  const { projects, tasks, isLoading, error, fetchData, activeFilters, undo, undoStack, redo, redoStack } = useProjectStore(
+  const { projects, tasks, isLoading, error, fetchData, activeFilters, setActiveFilters, undo, undoStack, redo, redoStack } = useProjectStore(
     useShallow((state) => ({
       projects: state.projects,
       tasks: state.tasks,
@@ -28,19 +77,20 @@ function App() {
       error: state.error,
       fetchData: state.fetchData,
       activeFilters: state.activeFilters,
+      setActiveFilters: state.setActiveFilters,
       undo: state.undo,
       undoStack: state.undoStack,
       redo: state.redo,
       redoStack: state.redoStack
     }))
   );
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isFilterOpen, setIsFilterOpen] = useState(false);
-  const [isTemplateStudioOpen, setIsTemplateStudioOpen] = useState(false);
-  const [isAddProjectOpen, setIsAddProjectOpen] = useState(false);
-  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [initialUrlViewState] = useState(parseUrlViewState);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(initialUrlViewState.selectedTaskId);
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(initialUrlViewState.editingProjectId);
+  const [openModal, setOpenModal] = useState<ViewModal | null>(initialUrlViewState.modal);
   const [zoomControls, setZoomControls] = useState({ canZoomIn: false, canZoomOut: true });
+  const [chartResetKey, setChartResetKey] = useState(0);
+  const [hasHydratedUrlState, setHasHydratedUrlState] = useState(false);
   const ganttChartRef = useRef<GanttChartHandle>(null);
   const environmentLabel = getEnvironmentLabel();
 
@@ -50,7 +100,61 @@ function App() {
     fetchData();
   }, [fetchData]);
 
+  useEffect(() => {
+    setActiveFilters(initialUrlViewState.filters);
+    setHasHydratedUrlState(true);
+  }, [initialUrlViewState.filters, setActiveFilters]);
+
+  useEffect(() => {
+    if (!hasHydratedUrlState) return;
+
+    writeUrlViewState({
+      selectedTaskId,
+      editingProjectId,
+      modal: openModal,
+      filters: activeFilters
+    });
+  }, [activeFilters, editingProjectId, hasHydratedUrlState, openModal, selectedTaskId]);
+
+  useEffect(() => {
+    if (isLoading) return;
+
+    if (selectedTaskId && !tasks.some((task) => task.id === selectedTaskId)) {
+      setSelectedTaskId(null);
+    }
+  }, [isLoading, selectedTaskId, tasks]);
+
+  useEffect(() => {
+    if (isLoading) return;
+
+    if (editingProjectId && !projects.some((project) => project.id === editingProjectId)) {
+      setEditingProjectId(null);
+      setOpenModal((current) => (current === 'edit-project' ? null : current));
+    }
+  }, [editingProjectId, isLoading, projects]);
+
+  useEffect(() => {
+    if (openModal === 'edit-project' && !editingProjectId) {
+      setOpenModal(null);
+    }
+  }, [editingProjectId, openModal]);
+
   const selectedTask = selectedTaskId ? tasks.find((task) => task.id === selectedTaskId) : undefined;
+  const isSettingsOpen = openModal === 'settings';
+  const isFilterOpen = openModal === 'filter';
+  const isTemplateStudioOpen = openModal === 'template';
+  const isAddProjectOpen = openModal === 'add-project';
+
+  const resetToHomeView = () => {
+    setSelectedTaskId(null);
+    setEditingProjectId(null);
+    setOpenModal(null);
+    setActiveFilters(HOME_FILTERS);
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(CHART_VIEW_STATE_STORAGE_KEY);
+    }
+    setChartResetKey((current) => current + 1);
+  };
 
   return (
     <div className="flex h-screen bg-slate-900 text-slate-50 font-sans">
@@ -58,9 +162,14 @@ function App() {
       <div className="flex-1 flex flex-col overflow-hidden">
         <header className="flex items-center justify-between px-6 py-3 border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm sticky top-0 z-10">
           <div>
-            <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-cyan-300">
+            <button
+              type="button"
+              onClick={resetToHomeView}
+              className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-cyan-300 hover:from-cyan-300 hover:to-blue-200 transition-colors cursor-pointer"
+              title="Return to the default home view"
+            >
               Residential Construction
-            </h1>
+            </button>
             <p className="text-sm text-slate-400 flex items-center flex-wrap gap-2">
               Residential Construction Manager
               <span className="px-1.5 py-0.5 bg-slate-800 text-cyan-300 text-[10px] rounded border border-cyan-500/30 font-mono">
@@ -88,7 +197,7 @@ function App() {
           </div>
           <div className="flex items-center space-x-3">
              <button
-               onClick={() => setIsFilterOpen(true)}
+               onClick={() => setOpenModal('filter')}
                className="relative p-2 bg-slate-800 hover:bg-slate-700 rounded-md border border-slate-700 shadow-sm transition-colors text-slate-300 hover:text-white"
                title="Filter Logic"
              >
@@ -100,14 +209,14 @@ function App() {
                )}
              </button>
              <button
-               onClick={() => setIsTemplateStudioOpen(true)}
+               onClick={() => setOpenModal('template')}
                className="p-2 bg-slate-800 hover:bg-slate-700 rounded-md border border-slate-700 shadow-sm transition-colors text-slate-300 hover:text-white"
                title="Scheduling Template Studio"
              >
                <FileText size={20} />
              </button>
               <button
-                onClick={() => setIsSettingsOpen(true)}
+                onClick={() => setOpenModal('settings')}
                 className="p-2 bg-slate-800 hover:bg-slate-700 rounded-md border border-slate-700 shadow-sm transition-colors text-slate-300 hover:text-white"
                 title="Color Matrix Settings"
               >
@@ -147,7 +256,7 @@ function App() {
               </button>
              <button 
                disabled={isLoading || !!error}
-               onClick={() => setIsAddProjectOpen(true)}
+               onClick={() => setOpenModal('add-project')}
                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:text-slate-500 disabled:shadow-none rounded-md font-medium text-sm transition-colors shadow-lg shadow-blue-500/20"
              >
                + Add Project
@@ -179,9 +288,13 @@ function App() {
               </div>
             ) : (
               <GanttChart
+                key={chartResetKey}
                 ref={ganttChartRef}
                 onTaskClick={(id) => setSelectedTaskId(id)}
-                onEditProject={(projectId) => setEditingProjectId(projectId)}
+                onEditProject={(projectId) => {
+                  setEditingProjectId(projectId);
+                  setOpenModal('edit-project');
+                }}
                 selectedTaskId={selectedTaskId}
                 onZoomStateChange={setZoomControls}
               />
@@ -201,28 +314,31 @@ function App() {
 
       {/* Settings Modal */}
       {isSettingsOpen && (
-        <VendorColorModal onClose={() => setIsSettingsOpen(false)} />
+        <VendorColorModal onClose={() => setOpenModal(null)} />
       )}
 
       {/* Filter Modal */}
       {isFilterOpen && (
-        <FilterModal onClose={() => setIsFilterOpen(false)} />
+        <FilterModal onClose={() => setOpenModal(null)} />
       )}
 
       {/* Template Studio */}
       {isTemplateStudioOpen && (
-        <TemplateStudioModal onClose={() => setIsTemplateStudioOpen(false)} />
+        <TemplateStudioModal onClose={() => setOpenModal(null)} />
       )}
 
       {isAddProjectOpen && (
-        <AddProjectModal onClose={() => setIsAddProjectOpen(false)} />
+        <AddProjectModal onClose={() => setOpenModal(null)} />
       )}
 
-      {editingProjectId && (
+      {openModal === 'edit-project' && editingProjectId && (
         <AddProjectModal
           mode="edit"
           projectId={editingProjectId}
-          onClose={() => setEditingProjectId(null)}
+          onClose={() => {
+            setEditingProjectId(null);
+            setOpenModal(null);
+          }}
         />
       )}
     </div>
