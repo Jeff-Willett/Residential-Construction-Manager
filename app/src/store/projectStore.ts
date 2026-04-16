@@ -112,6 +112,7 @@ interface DependencyRow {
   id: string;
   predecessor_id: string;
   successor_id: string;
+  follow_predecessor_changes: boolean | null;
 }
 
 interface ProjectPhaseRow {
@@ -281,6 +282,7 @@ interface ProjectState {
   updateTaskDuration: (taskId: string, duration: number) => Promise<void>;
   updateTaskLag: (taskId: string, lag: number) => Promise<void>;
   updateTaskSubcontractor: (taskId: string, subcontractor: string | null, bottleneck_vendor: string | null) => Promise<void>;
+  updateDependencyFollowSetting: (dependencyId: string, followPredecessorChanges: boolean) => Promise<void>;
   setVendorColor: (vendor: string, color: string) => Promise<void>;
   toggleFilter: (type: keyof ActiveFilters, value: string) => void;
   setActiveFilters: (filters: ActiveFilters) => void;
@@ -496,7 +498,8 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       const fetchedDeps: EngineDependency[] = ((depsData as DependencyRow[] | null) || []).map((d) => ({
         id: d.id,
         predecessor_id: d.predecessor_id,
-        successor_id: d.successor_id
+        successor_id: d.successor_id,
+        follow_predecessor_changes: d.follow_predecessor_changes ?? true
       }));
 
       // Apply Engine Logic
@@ -1238,6 +1241,31 @@ export const useProjectStore = create<ProjectState>((set, get) => {
 
   updateTaskSubcontractor: async (taskId: string, subcontractor: string | null, bottleneck_vendor: string | null) => {
     await updateTaskFields(taskId, { subcontractor, bottleneck_vendor });
+  },
+
+  updateDependencyFollowSetting: async (dependencyId: string, followPredecessorChanges: boolean) => {
+    const { dependencies, projects, tasks } = get();
+    const nextDependencies = dependencies.map((dependency) =>
+      dependency.id === dependencyId
+        ? { ...dependency, follow_predecessor_changes: followPredecessorChanges }
+        : dependency
+    );
+
+    const recalculated = calculateScheduleEngine(projects, tasks, nextDependencies);
+    set({
+      dependencies: nextDependencies,
+      tasks: recalculated
+    });
+
+    const { error } = await supabase
+      .from('dependencies')
+      .update({ follow_predecessor_changes: followPredecessorChanges })
+      .eq('id', dependencyId);
+
+    if (error) {
+      console.error('Failed to sync dependency follow setting to DB:', error);
+      await get().fetchData();
+    }
   },
 
   undo: async () => {

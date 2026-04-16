@@ -110,6 +110,7 @@ export interface EngineDependency {
   id: string;
   predecessor_id: string;
   successor_id: string;
+  follow_predecessor_changes?: boolean;
 }
 
 export function calculateScheduleEngine(
@@ -238,8 +239,15 @@ export function calculateScheduleEngine(
           let maxFinish = '1970-01-01';
           for (const p of sPreds) {
              const preTask = taskMap.get(p)!;
-             if (parseISO(preTask.calculated_finish!) > parseISO(maxFinish)) {
-                 maxFinish = preTask.calculated_finish!;
+             const dependency = dependencies.find(
+              (candidate) => candidate.predecessor_id === p && candidate.successor_id === succ
+             );
+             const predecessorFinish =
+              dependency?.follow_predecessor_changes === false
+                ? getFinishDateFromDuration(preTask.logic_start!, preTask.duration)
+                : preTask.calculated_finish!;
+             if (parseISO(predecessorFinish) > parseISO(maxFinish)) {
+                 maxFinish = predecessorFinish;
              }
           }
           sTask.logic_start = addWorkingDays(maxFinish, 1 + (sTask.lag || 0)); 
