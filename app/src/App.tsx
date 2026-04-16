@@ -2,11 +2,10 @@ import { useState, useEffect, useRef } from 'react';
 import { useProjectStore, type ActiveFilters } from './store/projectStore';
 import { GanttChart, type GanttChartHandle } from './components/GanttChart';
 import { SidePanel } from './components/SidePanel';
-import { VendorColorModal } from './components/VendorColorModal';
 import { FilterModal } from './components/FilterModal';
-import { TemplateStudioModal } from './components/TemplateStudioModal';
+import { TemplateStudioModal, type TemplateStudioTab } from './components/TemplateStudioModal';
 import { AddProjectModal } from './components/AddProjectModal';
-import { Settings, Filter, RotateCcw, RotateCw, FileText, ZoomIn, ZoomOut } from 'lucide-react';
+import { Filter, RotateCcw, RotateCw, FileText, ZoomIn, ZoomOut } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 
 const APP_VERSION = __APP_VERSION__;
@@ -16,7 +15,7 @@ const APP_VERCEL_ENV = __VERCEL_ENV__;
 const CHART_VIEW_STATE_STORAGE_KEY = 'gantt:view-state';
 const HOME_FILTERS: ActiveFilters = { projects: [], vendors: [], scopes: [] };
 
-type ViewModal = 'settings' | 'filter' | 'template' | 'add-project' | 'edit-project';
+type ViewModal = 'filter' | 'template' | 'add-project' | 'edit-project';
 type UrlViewState = {
   selectedTaskId: string | null;
   editingProjectId: string | null;
@@ -51,12 +50,13 @@ const parseUrlViewState = (): UrlViewState => {
 
   const params = new URLSearchParams(window.location.search);
   const modal = params.get('modal');
-  const allowedModals: ViewModal[] = ['settings', 'filter', 'template', 'add-project', 'edit-project'];
+  const allowedModals: ViewModal[] = ['filter', 'template', 'add-project', 'edit-project'];
+  const normalizedModal = modal === 'settings' ? 'template' : modal;
 
   return {
     selectedTaskId: params.get('task'),
     editingProjectId: params.get('project'),
-    modal: allowedModals.includes(modal as ViewModal) ? (modal as ViewModal) : null,
+    modal: allowedModals.includes(normalizedModal as ViewModal) ? (normalizedModal as ViewModal) : null,
     filters: {
       projects: params.getAll('filterProject'),
       vendors: params.getAll('filterVendor'),
@@ -140,6 +140,7 @@ function App() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(initialUrlViewState.selectedTaskId);
   const [editingProjectId, setEditingProjectId] = useState<string | null>(initialUrlViewState.editingProjectId);
   const [openModal, setOpenModal] = useState<ViewModal | null>(initialUrlViewState.modal);
+  const [templateStudioInitialTab, setTemplateStudioInitialTab] = useState<TemplateStudioTab>('overview');
   const [zoomControls, setZoomControls] = useState({ canZoomIn: false, canZoomOut: true });
   const [chartResetKey, setChartResetKey] = useState(0);
   const [hasHydratedUrlState, setHasHydratedUrlState] = useState(false);
@@ -192,7 +193,6 @@ function App() {
   }, [editingProjectId, openModal]);
 
   const selectedTask = selectedTaskId ? tasks.find((task) => task.id === selectedTaskId) : undefined;
-  const isSettingsOpen = openModal === 'settings';
   const isFilterOpen = openModal === 'filter';
   const isTemplateStudioOpen = openModal === 'template';
   const isAddProjectOpen = openModal === 'add-project';
@@ -259,19 +259,15 @@ function App() {
                )}
              </button>
              <button
-               onClick={() => setOpenModal('template')}
+               onClick={() => {
+                 setTemplateStudioInitialTab('overview');
+                 setOpenModal('template');
+               }}
                className="p-2 bg-slate-800 hover:bg-slate-700 rounded-md border border-slate-700 shadow-sm transition-colors text-slate-300 hover:text-white"
                title="Scheduling Template Studio"
              >
                <FileText size={20} />
              </button>
-              <button
-                onClick={() => setOpenModal('settings')}
-                className="p-2 bg-slate-800 hover:bg-slate-700 rounded-md border border-slate-700 shadow-sm transition-colors text-slate-300 hover:text-white"
-                title="Color Matrix Settings"
-              >
-                <Settings size={20} />
-              </button>
               <button
                 disabled={undoStack.length === 0 || isLoading}
                 onClick={undo}
@@ -362,11 +358,6 @@ function App() {
         />
       )}
 
-      {/* Settings Modal */}
-      {isSettingsOpen && (
-        <VendorColorModal onClose={() => setOpenModal(null)} />
-      )}
-
       {/* Filter Modal */}
       {isFilterOpen && (
         <FilterModal onClose={() => setOpenModal(null)} />
@@ -374,7 +365,13 @@ function App() {
 
       {/* Template Studio */}
       {isTemplateStudioOpen && (
-        <TemplateStudioModal onClose={() => setOpenModal(null)} />
+        <TemplateStudioModal
+          initialTab={templateStudioInitialTab}
+          onClose={() => {
+            setTemplateStudioInitialTab('overview');
+            setOpenModal(null);
+          }}
+        />
       )}
 
       {isAddProjectOpen && (

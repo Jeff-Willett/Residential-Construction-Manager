@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { clsx } from 'clsx';
 import { useShallow } from 'zustand/react/shallow';
-import { ArrowRight, FileText, GitBranch, Info, Layers3, Plus, Save, Trash2, X } from 'lucide-react';
+import { ArrowRight, FileText, GitBranch, Info, Layers3, Palette, Plus, Save, Trash2, X } from 'lucide-react';
 import { useProjectStore } from '../store/projectStore';
+import { buildSubcontractorOptions } from '../utils/subcontractors';
 
-type StudioTab = 'overview' | 'phases' | 'templates' | 'dependencies';
+export type TemplateStudioTab = 'overview' | 'phases' | 'templates' | 'subcontractors' | 'dependencies';
 
 type PhaseDraft = {
   name: string;
@@ -39,10 +40,20 @@ type DependencyDraft = {
   successor_id: string;
 };
 
-const STUDIO_TABS: { id: StudioTab; label: string; icon: typeof Info }[] = [
+type SubcontractorDraft = {
+  name: string;
+  color: string;
+};
+
+type PendingSubcontractorDraft = SubcontractorDraft & {
+  localId: string;
+};
+
+const STUDIO_TABS: { id: TemplateStudioTab; label: string; icon: typeof Info }[] = [
   { id: 'overview', label: 'Rules', icon: Info },
   { id: 'phases', label: 'Phases', icon: Layers3 },
   { id: 'templates', label: 'Scopes', icon: FileText },
+  { id: 'subcontractors', label: 'Subs', icon: Palette },
   { id: 'dependencies', label: 'Dependencies', icon: GitBranch }
 ];
 
@@ -148,19 +159,31 @@ function getDependencyGraphIssue(
   return visited === inDegree.size ? null : 'This dependency map contains a circular dependency.';
 }
 
-export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
+export function TemplateStudioModal({
+  onClose,
+  initialTab = 'overview'
+}: {
+  onClose: () => void;
+  initialTab?: TemplateStudioTab;
+}) {
   const {
     phaseTemplates,
     templates,
     templateDependencies,
     tasks,
     projects,
+    subcontractors,
+    vendorColors,
     createPhaseTemplate,
     updatePhaseTemplate,
     deletePhaseTemplate,
     createTaskTemplate,
     updateTaskTemplate,
     deleteTaskTemplate,
+    createSubcontractor,
+    updateSubcontractor,
+    deleteSubcontractor,
+    setVendorColor,
     addTemplateDependency,
     removeTemplateDependency
   } = useProjectStore(
@@ -170,18 +193,24 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
       templateDependencies: state.templateDependencies,
       tasks: state.tasks,
       projects: state.projects,
+      subcontractors: state.subcontractors,
+      vendorColors: state.vendorColors,
       createPhaseTemplate: state.createPhaseTemplate,
       updatePhaseTemplate: state.updatePhaseTemplate,
       deletePhaseTemplate: state.deletePhaseTemplate,
       createTaskTemplate: state.createTaskTemplate,
       updateTaskTemplate: state.updateTaskTemplate,
       deleteTaskTemplate: state.deleteTaskTemplate,
+      createSubcontractor: state.createSubcontractor,
+      updateSubcontractor: state.updateSubcontractor,
+      deleteSubcontractor: state.deleteSubcontractor,
+      setVendorColor: state.setVendorColor,
       addTemplateDependency: state.addTemplateDependency,
       removeTemplateDependency: state.removeTemplateDependency
     }))
   );
 
-  const [activeTab, setActiveTab] = useState<StudioTab>('overview');
+  const [activeTab, setActiveTab] = useState<TemplateStudioTab>(initialTab);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -195,8 +224,12 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
   const [dependencyDrafts, setDependencyDrafts] = useState<Record<string, DependencyDraft>>({});
   const [pendingDependencyCreates, setPendingDependencyCreates] = useState<PendingDependencyDraft[]>([]);
   const [pendingDependencyDeletes, setPendingDependencyDeletes] = useState<string[]>([]);
+  const [subcontractorDrafts, setSubcontractorDrafts] = useState<Record<string, SubcontractorDraft>>({});
+  const [pendingSubcontractorCreates, setPendingSubcontractorCreates] = useState<PendingSubcontractorDraft[]>([]);
+  const [pendingSubcontractorDeletes, setPendingSubcontractorDeletes] = useState<string[]>([]);
 
   const [newPhase, setNewPhase] = useState<PhaseDraft>({ name: '', phase_order: phaseTemplates.length + 1 });
+  const [newSubcontractorName, setNewSubcontractorName] = useState('');
   const [newTemplate, setNewTemplate] = useState<TemplateDraft>({
     phase_template_id: phaseTemplates[0]?.id ?? null,
     task_order: templates.length + 1,
@@ -246,6 +279,22 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
   }, [templateDependencies]);
 
   useEffect(() => {
+    setSubcontractorDrafts(
+      Object.fromEntries(
+        subcontractors.map((subcontractor) => [
+          subcontractor.id,
+          {
+            name: subcontractor.name,
+            color: vendorColors[subcontractor.name] || ''
+          }
+        ])
+      )
+    );
+    setPendingSubcontractorCreates([]);
+    setPendingSubcontractorDeletes([]);
+  }, [subcontractors, vendorColors]);
+
+  useEffect(() => {
     setNewPhase((current) => ({
       ...current,
       phase_order: current.name ? current.phase_order : phaseTemplates.length + 1
@@ -287,6 +336,60 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
   const phaseNameById = useMemo(() => {
     return new Map(visiblePhaseTemplates.map((phase) => [phase.id, phase.name]));
   }, [visiblePhaseTemplates]);
+
+  const visibleSubcontractors = useMemo(() => {
+    return subcontractors.filter((subcontractor) => !pendingSubcontractorDeletes.includes(subcontractor.id));
+  }, [pendingSubcontractorDeletes, subcontractors]);
+
+  const displayedSubcontractorRows = useMemo(() => {
+    return [
+      ...visibleSubcontractors.map((subcontractor) => ({
+        id: subcontractor.id,
+        isNew: false,
+        draft: subcontractorDrafts[subcontractor.id] ?? {
+          name: subcontractor.name,
+          color: vendorColors[subcontractor.name] || ''
+        },
+        sourceName: subcontractor.name
+      })),
+      ...pendingSubcontractorCreates.map((subcontractor) => ({
+        id: subcontractor.localId,
+        isNew: true,
+        draft: {
+          name: subcontractor.name,
+          color: subcontractor.color
+        },
+        sourceName: subcontractor.name
+      }))
+    ].sort((a, b) => a.draft.name.localeCompare(b.draft.name));
+  }, [pendingSubcontractorCreates, subcontractorDrafts, vendorColors, visibleSubcontractors]);
+
+  const subcontractorOptions = useMemo(() => {
+    return buildSubcontractorOptions(
+      displayedSubcontractorRows.map((subcontractor) => subcontractor.draft.name),
+      [
+        ...templates.map((template) => template.subcontractor),
+        ...pendingTemplateCreates.map((template) => template.subcontractor),
+        ...tasks.map((task) => task.subcontractor)
+      ]
+    );
+  }, [displayedSubcontractorRows, pendingTemplateCreates, tasks, templates]);
+
+  const subcontractorUsage = useMemo(() => {
+    const usage = new Map<string, number>();
+
+    templates.forEach((template) => {
+      if (!template.subcontractor) return;
+      usage.set(template.subcontractor, (usage.get(template.subcontractor) ?? 0) + 1);
+    });
+
+    tasks.forEach((task) => {
+      if (!task.subcontractor) return;
+      usage.set(task.subcontractor, (usage.get(task.subcontractor) ?? 0) + 1);
+    });
+
+    return usage;
+  }, [tasks, templates]);
 
   const phaseOrderById = useMemo(() => {
     return new Map(visiblePhaseTemplates.map((phase) => [phase.id, phase.phase_order]));
@@ -564,6 +667,23 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
     setNewDependency({ predecessor_id: '', successor_id: '' });
   };
 
+  const resetSubcontractorChanges = () => {
+    setSubcontractorDrafts(
+      Object.fromEntries(
+        subcontractors.map((subcontractor) => [
+          subcontractor.id,
+          {
+            name: subcontractor.name,
+            color: vendorColors[subcontractor.name] || ''
+          }
+        ])
+      )
+    );
+    setPendingSubcontractorCreates([]);
+    setPendingSubcontractorDeletes([]);
+    setNewSubcontractorName('');
+  };
+
   const savePhaseChanges = () =>
     runAction('Saved phase changes', async () => {
       for (const phase of visiblePhaseTemplates) {
@@ -624,6 +744,40 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
       resetTemplateChanges();
     });
 
+  const saveSubcontractorChanges = () =>
+    runAction('Saved subcontractor changes', async () => {
+      for (const subcontractor of visibleSubcontractors) {
+        const draft = subcontractorDrafts[subcontractor.id];
+        if (!draft) continue;
+
+        const nextName = draft.name.trim();
+        const currentColor = vendorColors[subcontractor.name] || '';
+        const nextColor = draft.color || '';
+
+        if (nextName !== subcontractor.name) {
+          await updateSubcontractor(subcontractor.id, nextName);
+        }
+
+        const effectiveName = nextName || subcontractor.name;
+        if (nextColor !== currentColor) {
+          await setVendorColor(effectiveName, nextColor);
+        }
+      }
+
+      for (const subcontractor of pendingSubcontractorCreates) {
+        await createSubcontractor(subcontractor.name);
+        if (subcontractor.color) {
+          await setVendorColor(subcontractor.name, subcontractor.color);
+        }
+      }
+
+      for (const subcontractorId of pendingSubcontractorDeletes) {
+        await deleteSubcontractor(subcontractorId);
+      }
+
+      resetSubcontractorChanges();
+    });
+
   const saveDependencyChanges = () =>
     runAction('Saved dependency changes', async () => {
       const desiredDependencyKeys = new Set(
@@ -653,6 +807,16 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
   const phaseSaveDisabled = !phaseHasChanges || !!busyLabel || displayedPhaseRows.some((phase) => !phase.draft.name.trim());
   const templateSaveDisabled =
     !templateHasChanges || !!busyLabel || displayedTemplateRows.some((template) => !template.draft.scope.trim());
+  const subcontractorHasChanges = useMemo(() => {
+    if (pendingSubcontractorCreates.length > 0 || pendingSubcontractorDeletes.length > 0) return true;
+    return visibleSubcontractors.some((subcontractor) => {
+      const draft = subcontractorDrafts[subcontractor.id];
+      const currentColor = vendorColors[subcontractor.name] || '';
+      return draft ? draft.name !== subcontractor.name || draft.color !== currentColor : false;
+    });
+  }, [pendingSubcontractorCreates.length, pendingSubcontractorDeletes.length, subcontractorDrafts, vendorColors, visibleSubcontractors]);
+  const subcontractorSaveDisabled =
+    !subcontractorHasChanges || !!busyLabel || displayedSubcontractorRows.some((subcontractor) => !subcontractor.draft.name.trim());
   const dependencySaveDisabled = !dependencyHasChanges || !!busyLabel || Boolean(dependencyGraphIssue);
 
   const activeTabMeta =
@@ -672,6 +836,14 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
             onSave: saveTemplateChanges,
             summary: `${pendingTemplateCreates.length} new, ${pendingTemplateDeletes.length} queued for delete`
           }
+        : activeTab === 'subcontractors'
+          ? {
+              hasChanges: subcontractorHasChanges,
+              saveDisabled: subcontractorSaveDisabled,
+              onReset: resetSubcontractorChanges,
+              onSave: saveSubcontractorChanges,
+              summary: `${pendingSubcontractorCreates.length} new, ${pendingSubcontractorDeletes.length} queued for delete`
+            }
         : activeTab === 'dependencies'
           ? {
               hasChanges: dependencyHasChanges,
@@ -999,7 +1171,7 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
                         placeholder="Scope name"
                         className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100 focus:outline-none focus:border-cyan-500"
                       />
-                      <input
+                      <select
                         value={newTemplate.subcontractor}
                         onChange={(event) =>
                           setNewTemplate((current) => ({
@@ -1008,9 +1180,15 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
                             bottleneck_vendor: syncBottleneckVendor(current.bottleneck_vendor, event.target.value)
                           }))
                         }
-                        placeholder="Contractor"
                         className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100 focus:outline-none focus:border-cyan-500"
-                      />
+                      >
+                        <option value="">Unassigned</option>
+                        {subcontractorOptions.map((subcontractor) => (
+                          <option key={subcontractor} value={subcontractor}>
+                            {subcontractor}
+                          </option>
+                        ))}
+                      </select>
                       <input
                         type="number"
                         min="1"
@@ -1177,7 +1355,7 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
                                         )}
                                       </div>
                                     </div>
-                                    <input
+                                    <select
                                       value={template.draft.subcontractor}
                                       onChange={(event) => {
                                         const nextSubcontractor = event.target.value;
@@ -1205,7 +1383,14 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
                                         }));
                                       }}
                                       className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100 focus:outline-none focus:border-cyan-500"
-                                    />
+                                    >
+                                      <option value="">Unassigned</option>
+                                      {subcontractorOptions.map((subcontractor) => (
+                                        <option key={subcontractor} value={subcontractor}>
+                                          {subcontractor}
+                                        </option>
+                                      ))}
+                                    </select>
                                     <input
                                       type="number"
                                       min="1"
@@ -1293,6 +1478,148 @@ export function TemplateStudioModal({ onClose }: { onClose: () => void }) {
                         </div>
                       </div>
                     )}
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'subcontractors' && (
+                <div className="space-y-6">
+                  <div className="rounded-3xl border border-slate-800 bg-slate-950/60 p-6">
+                    <div className="text-[11px] uppercase tracking-[0.22em] text-cyan-400 font-semibold">Queue a subcontractor</div>
+                    <p className="mt-2 text-sm text-slate-400">
+                      Stage name and color edits here, then save them together like the rest of the template studio.
+                    </p>
+                    <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_160px]">
+                      <input
+                        value={newSubcontractorName}
+                        onChange={(event) => setNewSubcontractorName(event.target.value)}
+                        placeholder="Subcontractor name"
+                        className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100 focus:outline-none focus:border-cyan-500"
+                      />
+                      <button
+                        disabled={!newSubcontractorName.trim() || !!busyLabel}
+                        onClick={() => {
+                          setPendingSubcontractorCreates((current) => [
+                            ...current,
+                            {
+                              localId: crypto.randomUUID(),
+                              name: newSubcontractorName.trim(),
+                              color: ''
+                            }
+                          ]);
+                          setNewSubcontractorName('');
+                        }}
+                        className="rounded-2xl bg-cyan-500/15 border border-cyan-500/30 px-4 py-3 font-medium text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center justify-center gap-2"
+                      >
+                        <Plus size={16} />
+                        Add Subcontractor
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="rounded-3xl border border-slate-800 bg-slate-950/40 overflow-hidden">
+                    <div className="border-b border-slate-800 bg-slate-950/70 px-5 py-3">
+                      <div className="grid gap-3 xl:grid-cols-[minmax(0,1.15fr)_160px_120px_140px]">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Subcontractor</div>
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Color</div>
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Usage</div>
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Actions</div>
+                      </div>
+                    </div>
+                    <div className="divide-y divide-slate-800">
+                      {displayedSubcontractorRows.length === 0 && (
+                        <div className="px-5 py-8 text-sm text-slate-400">No subcontractors have been added yet.</div>
+                      )}
+                      {displayedSubcontractorRows.map((subcontractor) => {
+                        const usageCount = subcontractorUsage.get(subcontractor.sourceName) ?? 0;
+                        const inUse = usageCount > 0 && !subcontractor.isNew;
+
+                        return (
+                          <div key={subcontractor.id} className="p-5">
+                            <div className="grid gap-3 xl:grid-cols-[minmax(0,1.15fr)_160px_120px_140px] xl:items-center">
+                              <div className="flex items-center gap-3">
+                                <input
+                                  value={subcontractor.draft.name}
+                                  onChange={(event) => {
+                                    const nextName = event.target.value;
+                                    if (subcontractor.isNew) {
+                                      setPendingSubcontractorCreates((current) =>
+                                        current.map((item) => (item.localId === subcontractor.id ? { ...item, name: nextName } : item))
+                                      );
+                                      return;
+                                    }
+                                    setSubcontractorDrafts((current) => ({
+                                      ...current,
+                                      [subcontractor.id]: { ...subcontractor.draft, name: nextName }
+                                    }));
+                                  }}
+                                  className="w-full rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100 focus:outline-none focus:border-cyan-500"
+                                />
+                                {subcontractor.isNew && (
+                                  <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-cyan-200">
+                                    New
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-3">
+                                <input
+                                  type="color"
+                                  value={subcontractor.draft.color || '#0891b2'}
+                                  onChange={(event) => {
+                                    const nextColor = event.target.value;
+                                    if (subcontractor.isNew) {
+                                      setPendingSubcontractorCreates((current) =>
+                                        current.map((item) => (item.localId === subcontractor.id ? { ...item, color: nextColor } : item))
+                                      );
+                                      return;
+                                    }
+                                    setSubcontractorDrafts((current) => ({
+                                      ...current,
+                                      [subcontractor.id]: { ...subcontractor.draft, color: nextColor }
+                                    }));
+                                  }}
+                                  className="h-11 w-full rounded-2xl border border-slate-700 bg-slate-900 px-2 py-2"
+                                />
+                                <button
+                                  onClick={() => {
+                                    if (subcontractor.isNew) {
+                                      setPendingSubcontractorCreates((current) =>
+                                        current.map((item) => (item.localId === subcontractor.id ? { ...item, color: '' } : item))
+                                      );
+                                      return;
+                                    }
+                                    setSubcontractorDrafts((current) => ({
+                                      ...current,
+                                      [subcontractor.id]: { ...subcontractor.draft, color: '' }
+                                    }));
+                                  }}
+                                  className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs font-medium uppercase tracking-[0.16em] text-slate-300 transition hover:border-red-500/40 hover:text-red-200"
+                                >
+                                  Reset
+                                </button>
+                              </div>
+                              <div className="text-sm text-slate-400">{inUse ? `${usageCount} refs` : 'Unused'}</div>
+                              <button
+                                disabled={inUse || !!busyLabel}
+                                onClick={() => {
+                                  if (subcontractor.isNew) {
+                                    setPendingSubcontractorCreates((current) => current.filter((item) => item.localId !== subcontractor.id));
+                                    return;
+                                  }
+                                  if (!confirm(`Delete subcontractor "${subcontractor.sourceName}" when you save this tab?`)) return;
+                                  setPendingSubcontractorDeletes((current) => [...current, subcontractor.id]);
+                                }}
+                                className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 font-medium text-red-200 hover:bg-red-500/15 disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center justify-center gap-2"
+                                title={inUse ? 'Remove its assignments before deleting this subcontractor.' : 'Queue this subcontractor for removal'}
+                              >
+                                <Trash2 size={16} />
+                                Delete
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
               )}

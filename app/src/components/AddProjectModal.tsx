@@ -7,6 +7,7 @@ import {
   type ProjectTaskDraftInput
 } from '../store/projectStore';
 import { calculateScheduleEngine, type EngineDependency, type EngineTask, type Project } from '../utils/schedulingEngine';
+import { buildSubcontractorOptions } from '../utils/subcontractors';
 
 type ProjectTaskDraft = ProjectTaskDraftInput & {
   localId: string;
@@ -116,6 +117,7 @@ export function AddProjectModal(props: AddProjectModalProps) {
     projectPhases,
     phaseTemplates,
     templates,
+    subcontractors,
     templateDependencies,
     addProjectFromDraft,
     updateProjectFromDraft,
@@ -128,6 +130,7 @@ export function AddProjectModal(props: AddProjectModalProps) {
       projectPhases: state.projectPhases,
       phaseTemplates: state.phaseTemplates,
       templates: state.templates,
+      subcontractors: state.subcontractors,
       templateDependencies: state.templateDependencies,
       addProjectFromDraft: state.addProjectFromDraft,
       updateProjectFromDraft: state.updateProjectFromDraft,
@@ -164,6 +167,13 @@ export function AddProjectModal(props: AddProjectModalProps) {
   }, [isEditMode, project, projectPhases, tasks, templates]);
 
   const phaseById = useMemo(() => new Map(phaseTemplates.map((phase) => [phase.id, phase])), [phaseTemplates]);
+
+  const subcontractorOptions = useMemo(() => {
+    return buildSubcontractorOptions(
+      subcontractors.map((subcontractor) => subcontractor.name),
+      taskDrafts.map((draft) => draft.subcontractor)
+    );
+  }, [subcontractors, taskDrafts]);
 
   const groupedDrafts = useMemo(() => {
     const buckets = new Map<string, ProjectTaskDraft[]>();
@@ -577,16 +587,22 @@ export function AddProjectModal(props: AddProjectModalProps) {
                                   placeholder="Scope name"
                                   className="h-9 rounded-md border border-slate-700 bg-slate-900 px-2 text-sm text-slate-100 focus:border-cyan-500 focus:outline-none"
                                 />
-                                <input
+                                <select
                                   value={draft.subcontractor ?? ''}
                                   onChange={(event) =>
                                     updateDraft(draft.localId, {
                                       subcontractor: event.target.value || null
                                     })
                                   }
-                                  placeholder="Contractor"
                                   className="h-9 rounded-md border border-slate-700 bg-slate-900 px-2 text-sm text-slate-100 focus:border-cyan-500 focus:outline-none"
-                                />
+                                >
+                                  <option value="">Unassigned</option>
+                                  {subcontractorOptions.map((subcontractor) => (
+                                    <option key={subcontractor} value={subcontractor}>
+                                      {subcontractor}
+                                    </option>
+                                  ))}
+                                </select>
                                 <input
                                   type="number"
                                   min="1"
