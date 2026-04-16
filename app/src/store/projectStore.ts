@@ -283,6 +283,7 @@ interface ProjectState {
   updateTaskSubcontractor: (taskId: string, subcontractor: string | null, bottleneck_vendor: string | null) => Promise<void>;
   setVendorColor: (vendor: string, color: string) => Promise<void>;
   toggleFilter: (type: keyof ActiveFilters, value: string) => void;
+  setActiveFilters: (filters: ActiveFilters) => void;
   clearFilters: () => void;
   deleteProject: (projectId: string) => Promise<void>;
   undo: () => Promise<void>;
@@ -404,6 +405,15 @@ export const useProjectStore = create<ProjectState>((set, get) => {
           return { activeFilters: { ...state.activeFilters, [type]: newArr } };
         });
       },
+
+      setActiveFilters: (filters: ActiveFilters) =>
+        set({
+          activeFilters: {
+            projects: [...filters.projects],
+            vendors: [...filters.vendors],
+            scopes: [...filters.scopes]
+          }
+        }),
 
       clearFilters: () => set({ activeFilters: { projects: [], vendors: [], scopes: [] } }),
 

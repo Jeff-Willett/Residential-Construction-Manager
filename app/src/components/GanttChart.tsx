@@ -7,6 +7,17 @@ import { useProjectStore } from '../store/projectStore';
 import type { EngineTask } from '../utils/schedulingEngine';
 
 type ZoomLevel = 'day' | 'week' | 'month';
+type PersistedVisibilityMap = Record<string, boolean>;
+type GanttChartViewState = {
+  version: 1;
+  zoomLevel: ZoomLevel;
+  leftPanelWidth: number;
+  expandedPhases: Record<string, boolean>;
+  hiddenProjectBars: PersistedVisibilityMap;
+  hiddenPhaseBars: PersistedVisibilityMap;
+  scrollTop: number;
+  scrollLeft: number;
+};
 
 const ZOOM_LEVELS: ZoomLevel[] = ['day', 'week', 'month'];
 const ZOOM_DAY_WIDTH: Record<ZoomLevel, number> = {
@@ -94,10 +105,11 @@ type PhaseRowMetric = {
 const PROJECT_ROW_HEIGHT = 34;
 const PHASE_ROW_HEIGHT = 28;
 const TASK_ROW_HEIGHT = 28;
+const CHART_VIEW_STATE_STORAGE_KEY = 'gantt:view-state';
 const HIDDEN_PROJECT_BARS_STORAGE_KEY = 'gantt:hidden-project-bars';
 const HIDDEN_PHASE_BARS_STORAGE_KEY = 'gantt:hidden-phase-bars';
 
-const readPersistedBarVisibility = (storageKey: string) => {
+const readPersistedBarVisibility = (storageKey: string): PersistedVisibilityMap => {
   if (typeof window === 'undefined') return {};
 
   try {
@@ -112,6 +124,94 @@ const readPersistedBarVisibility = (storageKey: string) => {
     );
   } catch {
     return {};
+  }
+};
+
+const isZoomLevel = (value: unknown): value is ZoomLevel =>
+  typeof value === 'string' && ZOOM_LEVELS.includes(value as ZoomLevel);
+
+const readPersistedChartViewState = (): GanttChartViewState => {
+  if (typeof window === 'undefined') {
+    return {
+      version: 1,
+      zoomLevel: 'day',
+      leftPanelWidth: 272,
+      expandedPhases: {},
+      hiddenProjectBars: {},
+      hiddenPhaseBars: {},
+      scrollTop: 0,
+      scrollLeft: 0
+    };
+  }
+
+  const fallbackHiddenProjectBars = readPersistedBarVisibility(HIDDEN_PROJECT_BARS_STORAGE_KEY);
+  const fallbackHiddenPhaseBars = readPersistedBarVisibility(HIDDEN_PHASE_BARS_STORAGE_KEY);
+
+  try {
+    const rawValue = window.localStorage.getItem(CHART_VIEW_STATE_STORAGE_KEY);
+    if (!rawValue) {
+      return {
+        version: 1,
+        zoomLevel: 'day',
+        leftPanelWidth: 272,
+        expandedPhases: {},
+        hiddenProjectBars: fallbackHiddenProjectBars,
+        hiddenPhaseBars: fallbackHiddenPhaseBars,
+        scrollTop: 0,
+        scrollLeft: 0
+      };
+    }
+
+    const parsed = JSON.parse(rawValue) as Partial<GanttChartViewState> | null;
+    const expandedPhases =
+      parsed?.expandedPhases && typeof parsed.expandedPhases === 'object' && !Array.isArray(parsed.expandedPhases)
+        ? Object.fromEntries(
+            Object.entries(parsed.expandedPhases).filter(
+              (entry): entry is [string, boolean] => typeof entry[0] === 'string' && typeof entry[1] === 'boolean'
+            )
+          )
+        : {};
+
+    return {
+      version: 1,
+      zoomLevel: isZoomLevel(parsed?.zoomLevel) ? parsed.zoomLevel : 'day',
+      leftPanelWidth:
+        typeof parsed?.leftPanelWidth === 'number' && Number.isFinite(parsed.leftPanelWidth)
+          ? Math.max(200, Math.min(520, parsed.leftPanelWidth))
+          : 272,
+      expandedPhases,
+      hiddenProjectBars:
+        parsed?.hiddenProjectBars && typeof parsed.hiddenProjectBars === 'object' && !Array.isArray(parsed.hiddenProjectBars)
+          ? Object.fromEntries(
+              Object.entries(parsed.hiddenProjectBars).filter(
+                (entry): entry is [string, boolean] => typeof entry[0] === 'string' && typeof entry[1] === 'boolean'
+              )
+            )
+          : fallbackHiddenProjectBars,
+      hiddenPhaseBars:
+        parsed?.hiddenPhaseBars && typeof parsed.hiddenPhaseBars === 'object' && !Array.isArray(parsed.hiddenPhaseBars)
+          ? Object.fromEntries(
+              Object.entries(parsed.hiddenPhaseBars).filter(
+                (entry): entry is [string, boolean] => typeof entry[0] === 'string' && typeof entry[1] === 'boolean'
+              )
+            )
+          : fallbackHiddenPhaseBars,
+      scrollTop:
+        typeof parsed?.scrollTop === 'number' && Number.isFinite(parsed.scrollTop) && parsed.scrollTop >= 0 ? parsed.scrollTop : 0,
+      scrollLeft:
+        typeof parsed?.scrollLeft === 'number' && Number.isFinite(parsed.scrollLeft) && parsed.scrollLeft >= 0 ? parsed.scrollLeft : 0
+    };
+  } catch {
+    return {
+      version: 1,
+      zoomLevel: 'day',
+      leftPanelWidth: 272,
+      expandedPhases: {},
+      hiddenProjectBars: fallbackHiddenProjectBars,
+      hiddenPhaseBars: fallbackHiddenPhaseBars,
+      scrollTop: 0,
+      scrollLeft: 0
+    };
   }
 };
 
@@ -143,16 +243,14 @@ export const GanttChart = forwardRef<GanttChartHandle, {
     }))
   );
 
-  const [zoomLevel, setZoomLevel] = useState<ZoomLevel>('day');
-  const [leftPanelWidth, setLeftPanelWidth] = useState(272);
-  const [expandedPhases, setExpandedPhases] = useState<Record<string, boolean>>({});
-  const [hiddenProjectBars, setHiddenProjectBars] = useState<Record<string, boolean>>(() =>
-    readPersistedBarVisibility(HIDDEN_PROJECT_BARS_STORAGE_KEY)
-  );
-  const [hiddenPhaseBars, setHiddenPhaseBars] = useState<Record<string, boolean>>(() =>
-    readPersistedBarVisibility(HIDDEN_PHASE_BARS_STORAGE_KEY)
-  );
-  const [scrollTop, setScrollTop] = useState(0);
+  const [persistedViewState] = useState(readPersistedChartViewState);
+  const [zoomLevel, setZoomLevel] = useState<ZoomLevel>(persistedViewState.zoomLevel);
+  const [leftPanelWidth, setLeftPanelWidth] = useState(persistedViewState.leftPanelWidth);
+  const [expandedPhases, setExpandedPhases] = useState<Record<string, boolean>>(persistedViewState.expandedPhases);
+  const [hiddenProjectBars, setHiddenProjectBars] = useState<Record<string, boolean>>(persistedViewState.hiddenProjectBars);
+  const [hiddenPhaseBars, setHiddenPhaseBars] = useState<Record<string, boolean>>(persistedViewState.hiddenPhaseBars);
+  const [scrollTop, setScrollTop] = useState(persistedViewState.scrollTop);
+  const [scrollLeft, setScrollLeft] = useState(persistedViewState.scrollLeft);
 
   const isResizing = useRef(false);
   const mainScrollRef = useRef<HTMLDivElement>(null);
@@ -160,6 +258,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
   const isScrollingTop = useRef(false);
   const isScrollingMain = useRef(false);
   const pendingZoomFocusDay = useRef<number | null>(null);
+  const hasRestoredScroll = useRef(false);
 
   const visibleTasks = useMemo(() => {
     const { projects: projectIds, vendors, scopes } = activeFilters;
@@ -506,6 +605,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
         isScrollingTop.current = true;
         topScroll.scrollLeft = mainScroll.scrollLeft;
         setScrollTop(mainScroll.scrollTop);
+        setScrollLeft(mainScroll.scrollLeft);
         setTimeout(() => {
           isScrollingTop.current = false;
         }, 50);
@@ -525,6 +625,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
     mainScroll.addEventListener('scroll', syncTop);
     topScroll.addEventListener('scroll', syncMain);
     setScrollTop(mainScroll.scrollTop);
+    setScrollLeft(mainScroll.scrollLeft);
 
     return () => {
       mainScroll.removeEventListener('scroll', syncTop);
@@ -533,6 +634,24 @@ export const GanttChart = forwardRef<GanttChartHandle, {
       document.removeEventListener('mouseup', handleMouseUp);
     };
   }, [datesInfo, handleMouseMove, handleMouseUp]);
+
+  useEffect(() => {
+    const mainScroll = mainScrollRef.current;
+    const topScroll = topScrollRef.current;
+    if (!mainScroll || !topScroll || dates.length === 0 || chartRows.length === 0 || hasRestoredScroll.current) return;
+
+    const maxScrollTop = Math.max(mainScroll.scrollHeight - mainScroll.clientHeight, 0);
+    const maxScrollLeft = Math.max(mainScroll.scrollWidth - mainScroll.clientWidth, 0);
+    const nextScrollTop = Math.max(0, Math.min(persistedViewState.scrollTop, maxScrollTop));
+    const nextScrollLeft = Math.max(0, Math.min(persistedViewState.scrollLeft, maxScrollLeft));
+
+    mainScroll.scrollTop = nextScrollTop;
+    mainScroll.scrollLeft = nextScrollLeft;
+    topScroll.scrollLeft = nextScrollLeft;
+    setScrollTop(nextScrollTop);
+    setScrollLeft(nextScrollLeft);
+    hasRestoredScroll.current = true;
+  }, [chartRows.length, dates.length, persistedViewState.scrollLeft, persistedViewState.scrollTop]);
 
   useEffect(() => {
     const mainScroll = mainScrollRef.current;
@@ -566,12 +685,20 @@ export const GanttChart = forwardRef<GanttChartHandle, {
   }, [allPersistablePhaseIds]);
 
   useEffect(() => {
-    window.localStorage.setItem(HIDDEN_PROJECT_BARS_STORAGE_KEY, JSON.stringify(hiddenProjectBars));
-  }, [hiddenProjectBars]);
-
-  useEffect(() => {
-    window.localStorage.setItem(HIDDEN_PHASE_BARS_STORAGE_KEY, JSON.stringify(hiddenPhaseBars));
-  }, [hiddenPhaseBars]);
+    window.localStorage.setItem(
+      CHART_VIEW_STATE_STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        zoomLevel,
+        leftPanelWidth,
+        expandedPhases,
+        hiddenProjectBars,
+        hiddenPhaseBars,
+        scrollTop,
+        scrollLeft
+      } satisfies GanttChartViewState)
+    );
+  }, [expandedPhases, hiddenPhaseBars, hiddenProjectBars, leftPanelWidth, scrollLeft, scrollTop, zoomLevel]);
 
   const captureZoomFocus = () => {
     const mainScroll = mainScrollRef.current;
