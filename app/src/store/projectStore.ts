@@ -192,6 +192,18 @@ function formatDbError(error: unknown, fallback: string): Error {
   return new Error(parts.join(' | '));
 }
 
+function logProjectUpdateEvent(
+  projectId: string,
+  step: string,
+  details: Record<string, unknown> = {}
+) {
+  console.info('[project-update]', {
+    projectId,
+    step,
+    ...details
+  });
+}
+
 interface ProjectState {
   projects: Project[];
   tasks: EngineTask[];
@@ -618,6 +630,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     const { phaseTemplates, dependencies, tasks: existingTasks } = state;
     const existingProject = state.projects.find((project) => project.id === projectId);
     if (!existingProject) throw new Error('Project not found.');
+    let failingStep = 'initialization';
 
     const trimmedName = name.trim();
     if (!trimmedName) throw new Error('Project name is required.');
@@ -657,16 +670,35 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       .map((dependency) => ({
         predecessor_source_task_id: dependency.predecessor_id,
         successor_source_task_id: dependency.successor_id
-      }));
+      }))
+      .filter(
+        (dependency) =>
+          retainedSourceTaskIds.has(dependency.predecessor_source_task_id) &&
+          retainedSourceTaskIds.has(dependency.successor_source_task_id)
+      );
     const createdTaskIds: string[] = [];
+    const removedTaskIds = existingProjectTasks
+      .filter((task) => !retainedSourceTaskIds.has(task.id))
+      .map((task) => task.id);
+
+    logProjectUpdateEvent(projectId, 'start', {
+      draftTaskCount: sanitizedTasks.length,
+      existingTaskCount: existingProjectTasks.length,
+      existingPhaseCount: existingProjectPhases.length,
+      existingDependencyCount: projectDependencies.length,
+      removedTaskCount: removedTaskIds.length,
+      retainedTaskCount: retainedSourceTaskIds.size
+    });
 
     try {
+      failingStep = 'update_project_record';
       const { error: projectErr } = await supabase
         .from('projects')
         .update({ name: trimmedName, start_date: startDate })
         .eq('id', projectId);
 
       if (projectErr) throw projectErr;
+      logProjectUpdateEvent(projectId, failingStep, { name: trimmedName, startDate });
 
       const phaseTemplateToProjectPhaseMap = new Map<string, string>();
       for (const phaseTemplateId of usedPhaseIds) {
@@ -677,15 +709,22 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         if (existingPhase) {
           phaseTemplateToProjectPhaseMap.set(phaseTemplateId, existingPhase.id);
           if (existingPhase.name !== phaseTemplate.name || existingPhase.phase_order !== phaseTemplate.phase_order) {
+            failingStep = `update_project_phase:${existingPhase.id}`;
             const { error: updatePhaseError } = await supabase
               .from('project_phases')
               .update({ name: phaseTemplate.name, phase_order: phaseTemplate.phase_order })
               .eq('id', existingPhase.id);
             if (updatePhaseError) throw updatePhaseError;
+            logProjectUpdateEvent(projectId, failingStep, {
+              phaseTemplateId,
+              projectPhaseId: existingPhase.id,
+              phaseName: phaseTemplate.name
+            });
           }
           continue;
         }
 
+        failingStep = `insert_project_phase:${phaseTemplateId}`;
         const { data: insertedPhase, error: insertPhaseError } = await supabase
           .from('project_phases')
           .insert({
@@ -701,6 +740,11 @@ export const useProjectStore = create<ProjectState>((set, get) => {
           throw insertPhaseError ?? new Error('Failed to save project phases.');
         }
 
+        logProjectUpdateEvent(projectId, failingStep, {
+          phaseTemplateId,
+          projectPhaseId: insertedPhase.id,
+          phaseName: insertedPhase.name
+        });
         phaseTemplateToProjectPhaseMap.set(phaseTemplateId, insertedPhase.id);
       }
 
@@ -748,17 +792,28 @@ export const useProjectStore = create<ProjectState>((set, get) => {
 
           if (!hasChanges) continue;
 
+          failingStep = `update_task:${existingTask.id}`;
           let { error: updateTaskError } = await supabase.from('tasks').update(taskPayload).eq('id', existingTask.id);
           if (updateTaskError && isManualDateColumnError(updateTaskError)) {
+            logProjectUpdateEvent(projectId, `${failingStep}:manual-date-fallback`, {
+              taskId: existingTask.id,
+              sourceTaskId: task.source_task_id
+            });
             ({ error: updateTaskError } = await supabase
               .from('tasks')
               .update(stripManualDateFields(taskPayload))
               .eq('id', existingTask.id));
           }
           if (updateTaskError) throw updateTaskError;
+          logProjectUpdateEvent(projectId, failingStep, {
+            taskId: existingTask.id,
+            sourceTaskId: task.source_task_id,
+            scope: task.scope
+          });
           continue;
         }
 
+        failingStep = `insert_task:${task.scope}`;
         let { data: insertedTask, error: insertTaskError } = await supabase
           .from('tasks')
           .insert(taskPayload)
@@ -766,6 +821,9 @@ export const useProjectStore = create<ProjectState>((set, get) => {
           .single();
 
         if (insertTaskError && isManualDateColumnError(insertTaskError)) {
+          logProjectUpdateEvent(projectId, `${failingStep}:manual-date-fallback`, {
+            scope: task.scope
+          });
           ({ data: insertedTask, error: insertTaskError } = await supabase
             .from('tasks')
             .insert(stripManualDateFields(taskPayload))
@@ -778,6 +836,10 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         }
 
         createdTaskIds.push(insertedTask.id);
+        logProjectUpdateEvent(projectId, failingStep, {
+          taskId: insertedTask.id,
+          scope: task.scope
+        });
       }
 
       const desiredDependencyKeys = new Set<string>(
@@ -809,8 +871,12 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         .map((dependency) => dependency.id);
 
       if (dependencyIdsToDelete.length > 0) {
+        failingStep = 'delete_dependencies';
         const { error: deleteDependenciesError } = await supabase.from('dependencies').delete().in('id', dependencyIdsToDelete);
         if (deleteDependenciesError) throw deleteDependenciesError;
+        logProjectUpdateEvent(projectId, failingStep, {
+          deletedDependencyCount: dependencyIdsToDelete.length
+        });
       }
 
       const dependencyInserts = Array.from(desiredDependencyKeys)
@@ -821,17 +887,22 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         });
 
       if (dependencyInserts.length > 0) {
+        failingStep = 'insert_dependencies';
         const { error: insertDependenciesError } = await supabase.from('dependencies').insert(dependencyInserts);
         if (insertDependenciesError) throw insertDependenciesError;
+        logProjectUpdateEvent(projectId, failingStep, {
+          insertedDependencyCount: dependencyInserts.length
+        });
       }
 
-      const taskIdsToDelete = existingProjectTasks
-        .filter((task) => !retainedSourceTaskIds.has(task.id))
-        .map((task) => task.id);
-
-      if (taskIdsToDelete.length > 0) {
-        const { error: deleteTasksError } = await supabase.from('tasks').delete().in('id', taskIdsToDelete);
+      if (removedTaskIds.length > 0) {
+        failingStep = 'delete_removed_tasks';
+        const { error: deleteTasksError } = await supabase.from('tasks').delete().in('id', removedTaskIds);
         if (deleteTasksError) throw deleteTasksError;
+        logProjectUpdateEvent(projectId, failingStep, {
+          removedTaskCount: removedTaskIds.length,
+          removedTaskIds
+        });
       }
 
       const phaseIdsToDelete = existingProjectPhases
@@ -839,19 +910,31 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         .map((phase) => phase.id);
 
       if (phaseIdsToDelete.length > 0) {
+        failingStep = 'delete_unused_phases';
         const { error: deletePhasesError } = await supabase.from('project_phases').delete().in('id', phaseIdsToDelete);
         if (deletePhasesError) throw deletePhasesError;
+        logProjectUpdateEvent(projectId, failingStep, {
+          deletedPhaseCount: phaseIdsToDelete.length,
+          deletedPhaseIds: phaseIdsToDelete
+        });
       }
 
+      failingStep = 'refresh_project_data';
       await get().fetchData();
+      logProjectUpdateEvent(projectId, 'completed', {
+        createdTaskCount: createdTaskIds.length,
+        removedTaskCount: removedTaskIds.length
+      });
     } catch (error) {
-      console.error('Failed to update project draft.', error);
+      console.error('Failed to update project draft.', {
+        projectId,
+        failingStep,
+        createdTaskIds,
+        removedTaskIds,
+        error
+      });
       await get().fetchData();
-      throw new Error(
-        createdTaskIds.length > 0
-          ? 'Failed to update project before removing existing data. Any newly added scopes may need cleanup, but the original project was left in place.'
-          : 'Failed to update project without deleting the existing project data.'
-      );
+      throw formatDbError(error, `Failed to update project during ${failingStep}.`);
     }
   },
 
