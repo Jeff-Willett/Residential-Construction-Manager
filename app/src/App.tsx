@@ -25,7 +25,7 @@ type UrlViewState = {
 
 type ResettableChartViewState = {
   version: 1;
-  zoomLevel: 'day' | 'week' | 'month';
+  zoomLevel: 'day' | 'week' | 'month' | 'year';
   leftPanelWidth: number;
   visibleProjectPhases: Record<string, boolean>;
   expandedPhases: Record<string, boolean>;

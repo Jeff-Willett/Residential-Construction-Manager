@@ -1,12 +1,12 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import { differenceInDays, addDays, endOfWeek, format, isWeekend, startOfWeek, parseISO } from 'date-fns';
+import { differenceInDays, addDays, endOfWeek, format, isWeekend, startOfWeek, parseISO, startOfDay } from 'date-fns';
 import { clsx } from 'clsx';
 import { AlertTriangle, ChevronDown, ChevronRight, ChevronsDown, ChevronsRight, Lightbulb, LightbulbOff, Pencil } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { useProjectStore } from '../store/projectStore';
 import type { EngineTask } from '../utils/schedulingEngine';
 
-type ZoomLevel = 'day' | 'week' | 'month';
+type ZoomLevel = 'day' | 'week' | 'month' | 'year';
 type PersistedVisibilityMap = Record<string, boolean>;
 type GanttChartViewState = {
   version: 1;
@@ -20,11 +20,12 @@ type GanttChartViewState = {
   scrollLeft: number;
 };
 
-const ZOOM_LEVELS: ZoomLevel[] = ['day', 'week', 'month'];
+const ZOOM_LEVELS: ZoomLevel[] = ['day', 'week', 'month', 'year'];
 const ZOOM_DAY_WIDTH: Record<ZoomLevel, number> = {
   day: 40,
   week: 16,
-  month: 10
+  month: 10,
+  year: 4
 };
 
 type MonthGroup = {
@@ -547,6 +548,22 @@ export const GanttChart = forwardRef<GanttChartHandle, {
   const dayWidth = ZOOM_DAY_WIDTH[zoomLevel];
 
   const totalGridWidth = useMemo(() => dates.length * dayWidth, [dates.length, dayWidth]);
+  const todayDateLabel = useMemo(() => format(startOfDay(new Date()), 'd'), []);
+  const todayMarkerOffset = useMemo(() => {
+    if (dates.length === 0) return null;
+
+    const today = startOfDay(new Date());
+    const offset = differenceInDays(today, dates[0]);
+    if (offset < 0 || offset >= dates.length) return null;
+
+    return offset * dayWidth + dayWidth / 2;
+  }, [dates, dayWidth]);
+  const gridViewportWidth = useMemo(() => {
+    const mainScroll = mainScrollRef.current;
+    if (!mainScroll) return 0;
+
+    return Math.max(mainScroll.clientWidth - leftPanelWidth, 0);
+  }, [leftPanelWidth, scrollLeft]);
 
   const headerHeight = useMemo(() => {
     if (zoomLevel === 'day') return 96;
@@ -554,11 +571,26 @@ export const GanttChart = forwardRef<GanttChartHandle, {
     return 32;
   }, [zoomLevel]);
 
-  const activeStickyRows = useMemo(() => {
+  const activeStickyRows = useMemo<{
+    activeProject: ProjectRowMetric | null;
+    activePhase: PhaseRowMetric | null;
+    projectOffset: number;
+    phaseOffset: number;
+  }>(() => {
     let activeProject: ProjectRowMetric | null = null;
     let nextProject: ProjectRowMetric | null = null;
     let activePhase: PhaseRowMetric | null = null;
     let nextPhase: PhaseRowMetric | null = null;
+    const visibleGridStart = scrollLeft;
+    const visibleGridEnd = scrollLeft + gridViewportWidth;
+    const phaseBarIsVisible = (phaseMetric: PhaseRowMetric) => {
+      const startDay = getDayOffset(phaseMetric.row.start);
+      const finishDay = getDayOffset(phaseMetric.row.finish);
+      const barLeft = startDay * dayWidth + 6;
+      const barRight = barLeft + Math.max((finishDay - startDay + 1) * dayWidth - 12, 8);
+
+      return barRight > visibleGridStart && barLeft < visibleGridEnd;
+    };
 
     // Use absolute scrollTop for detection thresholds
     // A project sticks when it hits the top (0)
@@ -582,6 +614,10 @@ export const GanttChart = forwardRef<GanttChartHandle, {
           nextPhase = metric as PhaseRowMetric;
         }
       }
+    }
+
+    if (activePhase && gridViewportWidth > 0 && !phaseBarIsVisible(activePhase)) {
+      activePhase = null;
     }
 
     // Calculate Push Offsets
@@ -612,11 +648,11 @@ export const GanttChart = forwardRef<GanttChartHandle, {
     }
 
     return { activeProject, activePhase, projectOffset, phaseOffset };
-  }, [scrollTop, rowMetrics]);
+  }, [dayWidth, getDayOffset, gridViewportWidth, rowMetrics, scrollLeft, scrollTop]);
 
   const { activeProject, activePhase, projectOffset, phaseOffset } = activeStickyRows;
-  const activeProjectMetric = activeProject;
-  const activePhaseMetric = activePhase;
+  const activeProjectMetric: ProjectRowMetric | null = activeProject;
+  const activePhaseMetric: PhaseRowMetric | null = activePhase;
 
   const handleMouseMove = useCallback((event: MouseEvent) => {
     if (!isResizing.current) return;
@@ -935,7 +971,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
       zoomIn: handleZoomIn,
       zoomOut: handleZoomOut,
       canZoomIn: zoomLevel !== 'day',
-      canZoomOut: zoomLevel !== 'month'
+      canZoomOut: zoomLevel !== 'year'
     }),
     [handleZoomIn, handleZoomOut, zoomLevel]
   );
@@ -943,7 +979,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
   useEffect(() => {
     onZoomStateChange?.({
       canZoomIn: zoomLevel !== 'day',
-      canZoomOut: zoomLevel !== 'month'
+      canZoomOut: zoomLevel !== 'year'
     });
   }, [onZoomStateChange, zoomLevel]);
 
@@ -1195,12 +1231,22 @@ export const GanttChart = forwardRef<GanttChartHandle, {
         <div className="flex-1 relative pb-6">
           <div className="inline-flex min-w-full">
             <div className="flex flex-col relative" style={{ width: totalGridWidth }}>
-              <div className="flex border-b border-slate-700 h-8 bg-slate-900 text-slate-300 sticky top-0 z-30">
+              <div className="flex border-b border-slate-700 h-8 bg-slate-900 text-slate-300 sticky top-0 z-30 relative">
+                {todayMarkerOffset !== null && (
+                  <div
+                    className="absolute top-1/2 pointer-events-none z-40"
+                    style={{ left: `${todayMarkerOffset}px`, transform: 'translate(-50%, -50%)' }}
+                  >
+                    <div className="flex h-5 w-5 items-center justify-center rounded-full border border-rose-100/85 bg-rose-400 text-[9px] font-bold text-white shadow-[0_0_10px_rgba(251,113,133,0.45)]">
+                      {todayDateLabel}
+                    </div>
+                  </div>
+                )}
                 {monthGroups.map((group, index) => (
                   <div
                     key={`${group.label}-${index}`}
                     style={{ width: group.days * dayWidth }}
-                    className="flex-shrink-0 border-r border-slate-500/55 flex items-center px-3 text-[10px] font-bold uppercase tracking-[0.16em] overflow-hidden whitespace-nowrap bg-slate-900/95"
+                    className="flex-shrink-0 border-r border-white/55 flex items-center px-3 text-[10px] font-bold uppercase tracking-[0.16em] overflow-hidden whitespace-nowrap bg-slate-900/95 shadow-[inset_-1px_0_0_rgba(255,255,255,0.22)]"
                   >
                     {group.label}
                   </div>
@@ -1255,14 +1301,22 @@ export const GanttChart = forwardRef<GanttChartHandle, {
                       : 'none'
                 }}
               >
-                <div className="absolute inset-0 flex pointer-events-none">
+                {todayMarkerOffset !== null && (
+                  <div
+                    className="absolute top-0 bottom-0 pointer-events-none z-0"
+                    style={{ left: `${todayMarkerOffset}px`, transform: 'translateX(-0.5px)' }}
+                  >
+                    <div className="absolute top-0 bottom-0 left-1/2 w-[2px] -translate-x-1/2 bg-rose-300/75 shadow-[0_0_8px_rgba(253,164,175,0.2)]" />
+                  </div>
+                )}
+                <div className="absolute inset-0 flex pointer-events-none z-0">
                   {monthGroups.map((group, index) => (
                     <div
                       key={`${group.label}-${index}`}
                       style={{ minWidth: group.days * dayWidth, flexShrink: 0 }}
                       className={clsx(
                         'border-r',
-                        zoomLevel === 'month' ? 'border-slate-400/65' : 'border-slate-500/55'
+                        zoomLevel === 'month' ? 'border-white/70' : 'border-white/55'
                       )}
                     />
                   ))}
