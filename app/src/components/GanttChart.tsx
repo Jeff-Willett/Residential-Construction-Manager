@@ -998,7 +998,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
       <div ref={mainScrollRef} className="flex flex-1 overflow-auto relative rounded-b-xl hide-scrollbar isolate">
         <div
           style={{ width: leftPanelWidth, minWidth: leftPanelWidth, maxWidth: leftPanelWidth }}
-          className="flex-shrink-0 self-start relative overflow-hidden border-r border-slate-700 bg-slate-800/95 z-40 sticky left-0 min-h-max [contain:paint]"
+          className="flex-shrink-0 self-start border-r border-slate-700 bg-slate-800/95 z-40 sticky left-0 min-h-max"
         >
           <div
             onMouseDown={handleMouseDown}
@@ -1228,7 +1228,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
           })}
         </div>
 
-        <div className="flex-1 min-w-0 relative overflow-hidden pb-6">
+        <div className="flex-1 min-w-0 relative pb-6">
           <div className="inline-flex min-w-full">
             <div className="flex flex-col relative" style={{ width: totalGridWidth }}>
               <div className="flex border-b border-slate-700 h-8 bg-slate-900 text-slate-300 sticky top-0 z-30 relative">
