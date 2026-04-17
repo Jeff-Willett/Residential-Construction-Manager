@@ -1228,7 +1228,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
           })}
         </div>
 
-        <div className="flex-1 min-w-0 relative overflow-hidden pb-6">
+        <div className="flex-1 min-w-0 relative pb-6">
           <div className="inline-flex min-w-full">
             <div className="flex flex-col relative" style={{ width: totalGridWidth }}>
               <div className="flex border-b border-slate-700 h-8 bg-slate-900 text-slate-300 sticky top-0 z-30 relative">
