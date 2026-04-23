@@ -25,8 +25,9 @@ type UrlViewState = {
 };
 
 type ResettableChartViewState = {
-  version: 1;
+  version: 2;
   zoomLevel: 'day' | 'week' | 'month' | 'year';
+  verticalZoomLevel: 'minCompressed' | 'maxCompressed' | 'ultraCompressed' | 'extraCompressed' | 'compressed' | 'standard';
   leftPanelWidth: number;
   visibleProjectPhases: Record<string, boolean>;
   expandedPhases: Record<string, boolean>;
@@ -109,8 +110,9 @@ const resetPersistedChartViewState = () => {
 
   const leftPanelWidth = readPreservedLeftPanelWidth();
   const resetState: ResettableChartViewState = {
-    version: 1,
+    version: 2,
     zoomLevel: 'day',
+    verticalZoomLevel: 'standard',
     leftPanelWidth,
     visibleProjectPhases: {},
     expandedPhases: {},
@@ -144,7 +146,13 @@ function App() {
   const [editingProjectId, setEditingProjectId] = useState<string | null>(initialUrlViewState.editingProjectId);
   const [openModal, setOpenModal] = useState<ViewModal | null>(initialUrlViewState.modal);
   const [templateStudioInitialTab, setTemplateStudioInitialTab] = useState<TemplateStudioTab>('overview');
-  const [zoomControls, setZoomControls] = useState({ canZoomIn: false, canZoomOut: true });
+  const [zoomControls, setZoomControls] = useState({
+    canZoomIn: false,
+    canZoomOut: true,
+    canZoomInVertical: true,
+    canZoomOutVertical: true,
+    verticalZoomPercent: 100
+  });
   const [chartResetKey, setChartResetKey] = useState(0);
   const [accessState, setAccessState] = useState<AccessState>('loading');
   const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
@@ -442,22 +450,46 @@ function App() {
               >
                 <RotateCw size={20} />
               </button>
-              <button
-                disabled={!zoomControls.canZoomOut || isLoading || !!error}
-                onClick={() => ganttChartRef.current?.zoomOut()}
-                className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed rounded-md border border-slate-700 shadow-sm transition-colors text-slate-300 hover:text-white"
-                title="Zoom Out"
-              >
-                <ZoomOut size={20} />
-              </button>
-              <button
-                disabled={!zoomControls.canZoomIn || isLoading || !!error}
-                onClick={() => ganttChartRef.current?.zoomIn()}
-                className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed rounded-md border border-slate-700 shadow-sm transition-colors text-slate-300 hover:text-white"
-                title="Zoom In"
-              >
-                <ZoomIn size={20} />
-              </button>
+              <div className="flex items-center gap-1 rounded-md border border-slate-700 bg-slate-900/60 px-2 py-1">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Time</span>
+                <button
+                  disabled={!zoomControls.canZoomOut || isLoading || !!error}
+                  onClick={() => ganttChartRef.current?.zoomOut()}
+                  className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed rounded-md border border-slate-700 shadow-sm transition-colors text-slate-300 hover:text-white"
+                  title="Horizontal Zoom Out"
+                >
+                  <ZoomOut size={20} />
+                </button>
+                <button
+                  disabled={!zoomControls.canZoomIn || isLoading || !!error}
+                  onClick={() => ganttChartRef.current?.zoomIn()}
+                  className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed rounded-md border border-slate-700 shadow-sm transition-colors text-slate-300 hover:text-white"
+                  title="Horizontal Zoom In"
+                >
+                  <ZoomIn size={20} />
+                </button>
+              </div>
+              <div className="flex items-center gap-1 rounded-md border border-slate-700 bg-slate-900/60 px-2 py-1">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Rows {zoomControls.verticalZoomPercent}%
+                </span>
+                <button
+                  disabled={!zoomControls.canZoomOutVertical || isLoading || !!error}
+                  onClick={() => ganttChartRef.current?.zoomOutVertical()}
+                  className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed rounded-md border border-slate-700 shadow-sm transition-colors text-slate-300 hover:text-white"
+                  title="Vertical Zoom Out"
+                >
+                  <ZoomOut size={20} />
+                </button>
+                <button
+                  disabled={!zoomControls.canZoomInVertical || isLoading || !!error}
+                  onClick={() => ganttChartRef.current?.zoomInVertical()}
+                  className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed rounded-md border border-slate-700 shadow-sm transition-colors text-slate-300 hover:text-white"
+                  title="Vertical Zoom In"
+                >
+                  <ZoomIn size={20} />
+                </button>
+              </div>
              <button 
                disabled={isLoading || !!error}
                onClick={() => setOpenModal('add-project')}

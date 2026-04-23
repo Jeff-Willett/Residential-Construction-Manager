@@ -7,10 +7,12 @@ import { useProjectStore } from '../store/projectStore';
 import type { EngineTask } from '../utils/schedulingEngine';
 
 type ZoomLevel = 'day' | 'week' | 'month' | 'year';
+type VerticalZoomLevel = 'minCompressed' | 'maxCompressed' | 'ultraCompressed' | 'extraCompressed' | 'compressed' | 'standard';
 type PersistedVisibilityMap = Record<string, boolean>;
 type GanttChartViewState = {
-  version: 1;
+  version: 2;
   zoomLevel: ZoomLevel;
+  verticalZoomLevel: VerticalZoomLevel;
   leftPanelWidth: number;
   visibleProjectPhases: PersistedVisibilityMap;
   expandedPhases: Record<string, boolean>;
@@ -21,11 +23,114 @@ type GanttChartViewState = {
 };
 
 const ZOOM_LEVELS: ZoomLevel[] = ['day', 'week', 'month', 'year'];
+const VERTICAL_ZOOM_LEVELS: VerticalZoomLevel[] = ['minCompressed', 'maxCompressed', 'ultraCompressed', 'extraCompressed', 'compressed', 'standard'];
 const ZOOM_DAY_WIDTH: Record<ZoomLevel, number> = {
   day: 40,
   week: 16,
   month: 10,
   year: 4
+};
+const VERTICAL_ROW_METRICS: Record<
+  VerticalZoomLevel,
+  {
+    projectRowHeight: number;
+    phaseRowHeight: number;
+    taskRowHeight: number;
+    projectBarHeight: number;
+    phaseBarHeight: number;
+    taskBarHeight: number;
+    taskLabelClassName: string;
+    taskMetaClassName: string;
+    taskVendorClassName: string;
+    taskBarTextClassName: string;
+    showTaskBarText: boolean;
+    scalePercent: number;
+  }
+> = {
+  minCompressed: {
+    projectRowHeight: 18,
+    phaseRowHeight: 14,
+    taskRowHeight: 4,
+    projectBarHeight: 10,
+    phaseBarHeight: 4,
+    taskBarHeight: 4,
+    taskLabelClassName: 'text-[6px]',
+    taskMetaClassName: 'hidden',
+    taskVendorClassName: 'text-[6px]',
+    taskBarTextClassName: 'text-[6px] px-0',
+    showTaskBarText: false,
+    scalePercent: 15
+  },
+  maxCompressed: {
+    projectRowHeight: 18,
+    phaseRowHeight: 14,
+    taskRowHeight: 6,
+    projectBarHeight: 10,
+    phaseBarHeight: 4,
+    taskBarHeight: 5,
+    taskLabelClassName: 'text-[7px]',
+    taskMetaClassName: 'hidden',
+    taskVendorClassName: 'text-[6px]',
+    taskBarTextClassName: 'text-[6px] px-0',
+    showTaskBarText: false,
+    scalePercent: 25
+  },
+  ultraCompressed: {
+    projectRowHeight: 18,
+    phaseRowHeight: 14,
+    taskRowHeight: 8,
+    projectBarHeight: 10,
+    phaseBarHeight: 4,
+    taskBarHeight: 6,
+    taskLabelClassName: 'text-[8px]',
+    taskMetaClassName: 'text-[7px]',
+    taskVendorClassName: 'text-[7px]',
+    taskBarTextClassName: 'text-[7px] px-0.5',
+    showTaskBarText: false,
+    scalePercent: 33
+  },
+  extraCompressed: {
+    projectRowHeight: 18,
+    phaseRowHeight: 14,
+    taskRowHeight: 9,
+    projectBarHeight: 10,
+    phaseBarHeight: 5,
+    taskBarHeight: 7,
+    taskLabelClassName: 'text-[8px]',
+    taskMetaClassName: 'text-[7px]',
+    taskVendorClassName: 'text-[7px]',
+    taskBarTextClassName: 'text-[7px] px-0.5',
+    showTaskBarText: false,
+    scalePercent: 38
+  },
+  compressed: {
+    projectRowHeight: 18,
+    phaseRowHeight: 14,
+    taskRowHeight: 11,
+    projectBarHeight: 10,
+    phaseBarHeight: 5,
+    taskBarHeight: 8,
+    taskLabelClassName: 'text-[9px]',
+    taskMetaClassName: 'text-[8px]',
+    taskVendorClassName: 'text-[8px]',
+    taskBarTextClassName: 'text-[8px] px-0.5',
+    showTaskBarText: false,
+    scalePercent: 46
+  },
+  standard: {
+    projectRowHeight: 30,
+    phaseRowHeight: 24,
+    taskRowHeight: 24,
+    projectBarHeight: 18,
+    phaseBarHeight: 12,
+    taskBarHeight: 16,
+    taskLabelClassName: 'text-[11px]',
+    taskMetaClassName: 'text-[9px]',
+    taskVendorClassName: 'text-[9px]',
+    taskBarTextClassName: 'text-[9px] px-1',
+    showTaskBarText: true,
+    scalePercent: 100
+  }
 };
 
 type MonthGroup = {
@@ -104,9 +209,6 @@ type PhaseRowMetric = {
   bottom: number;
 };
 
-const PROJECT_ROW_HEIGHT = 34;
-const PHASE_ROW_HEIGHT = 28;
-const TASK_ROW_HEIGHT = 28;
 const CHART_VIEW_STATE_STORAGE_KEY = 'gantt:view-state';
 const HIDDEN_PROJECT_BARS_STORAGE_KEY = 'gantt:hidden-project-bars';
 const HIDDEN_PHASE_BARS_STORAGE_KEY = 'gantt:hidden-phase-bars';
@@ -132,11 +234,15 @@ const readPersistedBarVisibility = (storageKey: string): PersistedVisibilityMap 
 const isZoomLevel = (value: unknown): value is ZoomLevel =>
   typeof value === 'string' && ZOOM_LEVELS.includes(value as ZoomLevel);
 
+const isVerticalZoomLevel = (value: unknown): value is VerticalZoomLevel =>
+  typeof value === 'string' && VERTICAL_ZOOM_LEVELS.includes(value as VerticalZoomLevel);
+
 const readPersistedChartViewState = (): GanttChartViewState => {
   if (typeof window === 'undefined') {
     return {
-      version: 1,
+      version: 2,
       zoomLevel: 'day',
+      verticalZoomLevel: 'standard',
       leftPanelWidth: 272,
       visibleProjectPhases: {},
       expandedPhases: {},
@@ -154,8 +260,9 @@ const readPersistedChartViewState = (): GanttChartViewState => {
     const rawValue = window.localStorage.getItem(CHART_VIEW_STATE_STORAGE_KEY);
     if (!rawValue) {
       return {
-        version: 1,
+        version: 2,
         zoomLevel: 'day',
+        verticalZoomLevel: 'standard',
         leftPanelWidth: 272,
         visibleProjectPhases: {},
         expandedPhases: {},
@@ -185,8 +292,9 @@ const readPersistedChartViewState = (): GanttChartViewState => {
         : {};
 
     return {
-      version: 1,
+      version: 2,
       zoomLevel: isZoomLevel(parsed?.zoomLevel) ? parsed.zoomLevel : 'day',
+      verticalZoomLevel: isVerticalZoomLevel(parsed?.verticalZoomLevel) ? parsed.verticalZoomLevel : 'standard',
       leftPanelWidth:
         typeof parsed?.leftPanelWidth === 'number' && Number.isFinite(parsed.leftPanelWidth)
           ? Math.max(200, Math.min(520, parsed.leftPanelWidth))
@@ -216,8 +324,9 @@ const readPersistedChartViewState = (): GanttChartViewState => {
     };
   } catch {
     return {
-      version: 1,
+      version: 2,
       zoomLevel: 'day',
+      verticalZoomLevel: 'standard',
       leftPanelWidth: 272,
       visibleProjectPhases: {},
       expandedPhases: {},
@@ -232,15 +341,25 @@ const readPersistedChartViewState = (): GanttChartViewState => {
 export type GanttChartHandle = {
   zoomIn: () => void;
   zoomOut: () => void;
+  zoomInVertical: () => void;
+  zoomOutVertical: () => void;
   canZoomIn: boolean;
   canZoomOut: boolean;
+  canZoomInVertical: boolean;
+  canZoomOutVertical: boolean;
 };
 
 export const GanttChart = forwardRef<GanttChartHandle, {
   onTaskClick: (id: string) => void;
   onEditProject: (projectId: string) => void;
   selectedTaskId: string | null;
-  onZoomStateChange?: (state: { canZoomIn: boolean; canZoomOut: boolean }) => void;
+  onZoomStateChange?: (state: {
+    canZoomIn: boolean;
+    canZoomOut: boolean;
+    canZoomInVertical: boolean;
+    canZoomOutVertical: boolean;
+    verticalZoomPercent: number;
+  }) => void;
 }> (function GanttChart({
   onTaskClick,
   onEditProject,
@@ -259,6 +378,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
 
   const [persistedViewState] = useState(readPersistedChartViewState);
   const [zoomLevel, setZoomLevel] = useState<ZoomLevel>(persistedViewState.zoomLevel);
+  const [verticalZoomLevel, setVerticalZoomLevel] = useState<VerticalZoomLevel>(persistedViewState.verticalZoomLevel);
   const [leftPanelWidth, setLeftPanelWidth] = useState(persistedViewState.leftPanelWidth);
   const [storedVisibleProjectPhases, setVisibleProjectPhases] = useState<Record<string, boolean>>(persistedViewState.visibleProjectPhases);
   const [expandedPhases, setExpandedPhases] = useState<Record<string, boolean>>(persistedViewState.expandedPhases);
@@ -266,6 +386,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
   const [storedHiddenPhaseBars, setHiddenPhaseBars] = useState<Record<string, boolean>>(persistedViewState.hiddenPhaseBars);
   const [scrollTop, setScrollTop] = useState(persistedViewState.scrollTop);
   const [scrollLeft, setScrollLeft] = useState(persistedViewState.scrollLeft);
+  const [gridViewportWidth, setGridViewportWidth] = useState(0);
 
   const isResizing = useRef(false);
   const mainScrollRef = useRef<HTMLDivElement>(null);
@@ -274,6 +395,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
   const isScrollingMain = useRef(false);
   const pendingZoomFocusDay = useRef<number | null>(null);
   const hasRestoredScroll = useRef(false);
+  const rowMetricsConfig = VERTICAL_ROW_METRICS[verticalZoomLevel];
 
   const visibleTasks = useMemo(() => {
     const { projects: projectIds, vendors, scopes } = activeFilters;
@@ -380,7 +502,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
         start: projectStart,
         finish: projectFinish,
         taskCount: sortedProjectTasks.length,
-        height: PROJECT_ROW_HEIGHT
+        height: rowMetricsConfig.projectRowHeight
       });
 
       const orderedPhases = Array.from(phaseMeta.entries()).sort((a, b) => {
@@ -418,7 +540,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
           start: phaseStart,
           finish: phaseFinish,
           taskCount: phaseTasks.length,
-          height: PHASE_ROW_HEIGHT,
+          height: rowMetricsConfig.phaseRowHeight,
           expanded
         });
 
@@ -442,7 +564,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
             bottleneckVendor: task.bottleneck_vendor,
             hasVendorCollision: (task.delay_days || 0) > 0 && Boolean(task.bottleneck_vendor) && Boolean(task.delay_cause_task_id || task.delay_cause_task_name),
             hasDependencyViolation: (task.logic_violation_days || 0) > 0,
-            height: TASK_ROW_HEIGHT
+            height: rowMetricsConfig.taskRowHeight
           });
         });
       });
@@ -451,7 +573,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
     });
 
     return { chartRows: rows, phaseIdsByProject, projectHasCollapsedPhase, projectShowsPhases };
-  }, [expandedPhases, projectPhases, projects, visibleProjectPhases, visibleTasks]);
+  }, [expandedPhases, projectPhases, projects, rowMetricsConfig.phaseRowHeight, rowMetricsConfig.projectRowHeight, rowMetricsConfig.taskRowHeight, visibleProjectPhases, visibleTasks]);
 
   const { chartRows, phaseIdsByProject, projectHasCollapsedPhase, projectShowsPhases } = chartMeta;
   const allPhaseIds = useMemo(() => Array.from(phaseIdsByProject.values()).flat(), [phaseIdsByProject]);
@@ -558,13 +680,6 @@ export const GanttChart = forwardRef<GanttChartHandle, {
 
     return offset * dayWidth + dayWidth / 2;
   }, [dates, dayWidth]);
-  const gridViewportWidth = useMemo(() => {
-    const mainScroll = mainScrollRef.current;
-    if (!mainScroll) return 0;
-
-    return Math.max(mainScroll.clientWidth - leftPanelWidth, 0);
-  }, [leftPanelWidth, scrollLeft]);
-
   const headerHeight = useMemo(() => {
     if (zoomLevel === 'day') return 96;
     if (zoomLevel === 'week') return 60;
@@ -594,7 +709,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
 
     // Use absolute scrollTop for detection thresholds
     // A project sticks when it hits the top (0)
-    // A phase sticks when it hits the bottom of the project header (PROJECT_ROW_HEIGHT)
+    // A phase sticks when it hits the bottom of the project header.
     for (let i = 0; i < rowMetrics.length; i++) {
       const metric = rowMetrics[i];
       
@@ -608,7 +723,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
       }
 
       if (metric.row.kind === 'phase' && activeProject && metric.row.projectId === activeProject.row.projectId) {
-        if (metric.top <= scrollTop + PROJECT_ROW_HEIGHT) {
+        if (metric.top <= scrollTop + rowMetricsConfig.projectRowHeight) {
           activePhase = metric as PhaseRowMetric;
         } else if (!nextPhase) {
           nextPhase = metric as PhaseRowMetric;
@@ -624,31 +739,31 @@ export const GanttChart = forwardRef<GanttChartHandle, {
     let projectOffset = 0;
     if (activeProject && nextProject) {
       const distance = nextProject.top - scrollTop;
-      if (distance < PROJECT_ROW_HEIGHT) {
-        projectOffset = distance - PROJECT_ROW_HEIGHT;
+      if (distance < rowMetricsConfig.projectRowHeight) {
+        projectOffset = distance - rowMetricsConfig.projectRowHeight;
       }
     }
 
     let phaseOffset = projectOffset; 
     if (activePhase) {
-      const phaseStickyThreshold = scrollTop + PROJECT_ROW_HEIGHT;
+      const phaseStickyThreshold = scrollTop + rowMetricsConfig.projectRowHeight;
       
       if (nextPhase) {
         const distance = nextPhase.top - phaseStickyThreshold;
-        if (distance < PHASE_ROW_HEIGHT) {
-          phaseOffset += (distance - PHASE_ROW_HEIGHT);
+        if (distance < rowMetricsConfig.phaseRowHeight) {
+          phaseOffset += (distance - rowMetricsConfig.phaseRowHeight);
         }
       } 
       else if (nextProject) {
         const distance = nextProject.top - phaseStickyThreshold;
-        if (distance < PHASE_ROW_HEIGHT) {
-          phaseOffset += (distance - PHASE_ROW_HEIGHT);
+        if (distance < rowMetricsConfig.phaseRowHeight) {
+          phaseOffset += (distance - rowMetricsConfig.phaseRowHeight);
         }
       }
     }
 
     return { activeProject, activePhase, projectOffset, phaseOffset };
-  }, [dayWidth, getDayOffset, gridViewportWidth, rowMetrics, scrollLeft, scrollTop]);
+  }, [dayWidth, getDayOffset, gridViewportWidth, rowMetrics, rowMetricsConfig.phaseRowHeight, rowMetricsConfig.projectRowHeight, scrollLeft, scrollTop]);
 
   const { activeProject, activePhase, projectOffset, phaseOffset } = activeStickyRows;
   const activeProjectMetric: ProjectRowMetric | null = activeProject;
@@ -712,6 +827,24 @@ export const GanttChart = forwardRef<GanttChartHandle, {
 
   useEffect(() => {
     const mainScroll = mainScrollRef.current;
+    if (!mainScroll) return;
+
+    const syncViewportWidth = () => {
+      setGridViewportWidth(Math.max(mainScroll.clientWidth - leftPanelWidth, 0));
+    };
+
+    syncViewportWidth();
+
+    const resizeObserver = new ResizeObserver(syncViewportWidth);
+    resizeObserver.observe(mainScroll);
+
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, [leftPanelWidth]);
+
+  useEffect(() => {
+    const mainScroll = mainScrollRef.current;
     const topScroll = topScrollRef.current;
     if (!mainScroll || !topScroll || dates.length === 0 || chartRows.length === 0 || hasRestoredScroll.current) return;
 
@@ -745,8 +878,9 @@ export const GanttChart = forwardRef<GanttChartHandle, {
     window.localStorage.setItem(
       CHART_VIEW_STATE_STORAGE_KEY,
       JSON.stringify({
-        version: 1,
+        version: 2,
         zoomLevel,
+        verticalZoomLevel,
         leftPanelWidth,
         visibleProjectPhases,
         expandedPhases,
@@ -756,7 +890,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
         scrollLeft
       } satisfies GanttChartViewState)
     );
-  }, [expandedPhases, hiddenPhaseBars, hiddenProjectBars, leftPanelWidth, scrollLeft, scrollTop, visibleProjectPhases, zoomLevel]);
+  }, [expandedPhases, hiddenPhaseBars, hiddenProjectBars, leftPanelWidth, scrollLeft, scrollTop, verticalZoomLevel, visibleProjectPhases, zoomLevel]);
 
   const captureZoomFocus = useCallback(() => {
     const mainScroll = mainScrollRef.current;
@@ -925,6 +1059,10 @@ export const GanttChart = forwardRef<GanttChartHandle, {
     setZoomLevel(ZOOM_LEVELS[Math.max(0, Math.min(ZOOM_LEVELS.length - 1, nextIndex))]);
   }, []);
 
+  const setVerticalZoomFromIndex = useCallback((nextIndex: number) => {
+    setVerticalZoomLevel(VERTICAL_ZOOM_LEVELS[Math.max(0, Math.min(VERTICAL_ZOOM_LEVELS.length - 1, nextIndex))]);
+  }, []);
+
   const centerTaskBarInView = useCallback(
     (taskId: string) => {
       const mainScroll = mainScrollRef.current;
@@ -965,23 +1103,40 @@ export const GanttChart = forwardRef<GanttChartHandle, {
     setZoomFromIndex(currentIndex + 1);
   }, [captureZoomFocus, setZoomFromIndex, zoomLevel]);
 
+  const handleVerticalZoomIn = useCallback(() => {
+    const currentIndex = VERTICAL_ZOOM_LEVELS.indexOf(verticalZoomLevel);
+    setVerticalZoomFromIndex(currentIndex + 1);
+  }, [setVerticalZoomFromIndex, verticalZoomLevel]);
+
+  const handleVerticalZoomOut = useCallback(() => {
+    const currentIndex = VERTICAL_ZOOM_LEVELS.indexOf(verticalZoomLevel);
+    setVerticalZoomFromIndex(currentIndex - 1);
+  }, [setVerticalZoomFromIndex, verticalZoomLevel]);
+
   useImperativeHandle(
     ref,
     () => ({
       zoomIn: handleZoomIn,
       zoomOut: handleZoomOut,
+      zoomInVertical: handleVerticalZoomIn,
+      zoomOutVertical: handleVerticalZoomOut,
       canZoomIn: zoomLevel !== 'day',
-      canZoomOut: zoomLevel !== 'year'
+      canZoomOut: zoomLevel !== 'year',
+      canZoomInVertical: verticalZoomLevel !== 'standard',
+      canZoomOutVertical: verticalZoomLevel !== 'minCompressed'
     }),
-    [handleZoomIn, handleZoomOut, zoomLevel]
+    [handleVerticalZoomIn, handleVerticalZoomOut, handleZoomIn, handleZoomOut, verticalZoomLevel, zoomLevel]
   );
 
   useEffect(() => {
     onZoomStateChange?.({
       canZoomIn: zoomLevel !== 'day',
-      canZoomOut: zoomLevel !== 'year'
+      canZoomOut: zoomLevel !== 'year',
+      canZoomInVertical: verticalZoomLevel !== 'standard',
+      canZoomOutVertical: verticalZoomLevel !== 'minCompressed',
+      verticalZoomPercent: rowMetricsConfig.scalePercent
     });
-  }, [onZoomStateChange, zoomLevel]);
+  }, [onZoomStateChange, rowMetricsConfig.scalePercent, verticalZoomLevel, zoomLevel]);
 
   return (
     <div className="flex flex-col h-full relative">
@@ -1162,7 +1317,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
                   key={row.key}
                   style={{ 
                     height: row.height,
-                    top: isPhaseSticky ? headerHeight + PROJECT_ROW_HEIGHT + phaseOffset : undefined
+                    top: isPhaseSticky ? headerHeight + rowMetricsConfig.projectRowHeight + phaseOffset : undefined
                   }}
                   className={clsx(
                     'w-full px-3 flex items-center justify-between border-b border-slate-700/40 bg-slate-800/90 hover:bg-slate-700/50 transition text-left',
@@ -1205,12 +1360,13 @@ export const GanttChart = forwardRef<GanttChartHandle, {
               >
                 {selectedTaskId === row.taskId && <div className="absolute left-0 top-0 bottom-0 w-1 bg-cyan-400 rounded-r shadow-[0_0_8px_rgba(34,211,238,0.8)]" />}
                 <div className="flex items-center gap-1.5 min-w-0 pl-5">
-                  <span className="text-[11px] font-medium text-slate-200 truncate">{row.label}</span>
-                  <span className="text-[9px] text-slate-500 flex-shrink-0">({row.duration}d)</span>
+                  <span className={clsx(rowMetricsConfig.taskLabelClassName, 'font-medium text-slate-200 truncate')}>{row.label}</span>
+                  <span className={clsx(rowMetricsConfig.taskMetaClassName, 'text-slate-500 flex-shrink-0')}>({row.duration}d)</span>
                   {row.subcontractor && (
                     <span
                       className={clsx(
-                        'text-[9px] uppercase truncate font-bold',
+                        rowMetricsConfig.taskVendorClassName,
+                        'uppercase truncate font-bold',
                         hasVendorCollision ? 'text-red-400' : hasDependencyViolation ? 'text-orange-400' : 'text-green-400/80'
                       )}
                     >
@@ -1387,9 +1543,11 @@ export const GanttChart = forwardRef<GanttChartHandle, {
                         {isProjectSticky && <div className="absolute inset-0 bg-slate-900 z-0" />}
                         {projectBarVisible && (
                           <div
-                            className="absolute h-5 rounded-md border border-cyan-300/30 bg-gradient-to-r from-cyan-600/90 to-blue-600/90 shadow-[0_6px_18px_rgba(8,145,178,0.25)] z-10"
+                            className="absolute rounded-md border border-cyan-300/30 bg-gradient-to-r from-cyan-600/90 to-blue-600/90 shadow-[0_6px_18px_rgba(8,145,178,0.25)] z-10"
                             style={{
+                              height: `${rowMetricsConfig.projectBarHeight}px`,
                               left: `${startDay * dayWidth + 4}px`,
+                              top: `${Math.max((row.height - rowMetricsConfig.projectBarHeight) / 2, 2)}px`,
                               width: `${Math.max(daySpan * dayWidth - 8, 10)}px`
                             }}
                           >
@@ -1412,7 +1570,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
                         key={row.key} 
                         style={{ 
                           height: row.height,
-                          top: isPhaseSticky ? headerHeight + PROJECT_ROW_HEIGHT + phaseOffset : undefined
+                          top: isPhaseSticky ? headerHeight + rowMetricsConfig.projectRowHeight + phaseOffset : undefined
                         }} 
                         className={clsx(
                           'border-b border-slate-700/20 relative flex items-center overflow-hidden',
@@ -1422,9 +1580,11 @@ export const GanttChart = forwardRef<GanttChartHandle, {
                         {isPhaseSticky && <div className="absolute inset-0 bg-slate-900 z-0" />}
                         {phaseBarVisible && (
                           <div
-                            className="absolute h-3.5 rounded border border-amber-300/30 bg-gradient-to-r from-amber-500/70 to-orange-500/70 shadow-[0_4px_12px_rgba(245,158,11,0.2)] z-10"
+                            className="absolute rounded border border-amber-300/30 bg-gradient-to-r from-amber-500/70 to-orange-500/70 shadow-[0_4px_12px_rgba(245,158,11,0.2)] z-10"
                             style={{
+                              height: `${rowMetricsConfig.phaseBarHeight}px`,
                               left: `${startDay * dayWidth + 6}px`,
+                              top: `${Math.max((row.height - rowMetricsConfig.phaseBarHeight) / 2, 2)}px`,
                               width: `${Math.max(daySpan * dayWidth - 12, 8)}px`
                             }}
                           >
@@ -1463,7 +1623,7 @@ export const GanttChart = forwardRef<GanttChartHandle, {
                       <div
                         onClick={() => onTaskClick(row.taskId)}
                         className={clsx(
-                          'absolute h-[18px] rounded shadow-lg transition-transform hover:-translate-y-0.5 cursor-pointer flex items-center px-1.5 z-10 box-border hover:brightness-110',
+                          'absolute rounded shadow-lg transition-transform hover:-translate-y-0.5 cursor-pointer flex items-center px-1.5 z-10 box-border hover:brightness-110',
                           !customColor && isDelayed && 'bg-red-500/90 border border-red-400 shadow-[0_4px_12px_rgba(239,68,68,0.4)]',
                           !customColor && !isDelayed && hasDependencyViolation && 'bg-orange-500/90 border border-orange-400 shadow-[0_4px_12px_rgba(249,115,22,0.35)]',
                           !customColor && !isDelayed && 'bg-gradient-to-r from-cyan-600 to-blue-600 border border-cyan-400/50 shadow-[0_4px_12px_rgba(8,145,178,0.3)]',
@@ -1473,13 +1633,15 @@ export const GanttChart = forwardRef<GanttChartHandle, {
                           selectedTaskId === row.taskId && 'ring-2 ring-white ring-offset-1 ring-offset-slate-900 scale-105'
                         )}
                         style={{
+                          height: `${rowMetricsConfig.taskBarHeight}px`,
                           left: `${startDay * dayWidth + 5}px`,
+                          top: `${Math.max((row.height - rowMetricsConfig.taskBarHeight) / 2, 2)}px`,
                           width: `${Math.max(daySpan * dayWidth - 10, 8)}px`,
                           ...(customColor ? { backgroundColor: customColor } : {})
                         }}
                       >
-                        {dayWidth * daySpan > 40 && (
-                          <span className={clsx('text-[9px] font-bold text-white drop-shadow-md truncate px-1 rounded', row.lag < 0 && 'bg-orange-600/50')}>
+                        {rowMetricsConfig.showTaskBarText && dayWidth * daySpan > 40 && (
+                          <span className={clsx(rowMetricsConfig.taskBarTextClassName, 'font-bold text-white drop-shadow-md truncate rounded', row.lag < 0 && 'bg-orange-600/50')}>
                             {row.lag < 0
                               ? `Overlap ${row.lag}d`
                               : hasDependencyViolation
