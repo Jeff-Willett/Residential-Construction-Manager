@@ -5,8 +5,9 @@ import { SidePanel } from './components/SidePanel';
 import { FilterModal } from './components/FilterModal';
 import { TemplateStudioModal, type TemplateStudioTab } from './components/TemplateStudioModal';
 import { AddProjectModal } from './components/AddProjectModal';
-import { Filter, RotateCcw, RotateCw, FileText, ZoomIn, ZoomOut } from 'lucide-react';
+import { Filter, LogOut, RotateCcw, RotateCw, FileText, ZoomIn, ZoomOut } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
+import { supabase } from './lib/supabase';
 
 const APP_VERSION = __APP_VERSION__;
 const APP_BRANCH = __GIT_BRANCH__;
@@ -34,6 +35,8 @@ type ResettableChartViewState = {
   scrollTop: number;
   scrollLeft: number;
 };
+
+type AccessState = 'loading' | 'signed_out' | 'checking' | 'approved' | 'unauthorized';
 
 const getEnvironmentLabel = () => {
   if (import.meta.env.DEV) return 'local testing';
@@ -143,6 +146,9 @@ function App() {
   const [templateStudioInitialTab, setTemplateStudioInitialTab] = useState<TemplateStudioTab>('overview');
   const [zoomControls, setZoomControls] = useState({ canZoomIn: false, canZoomOut: true });
   const [chartResetKey, setChartResetKey] = useState(0);
+  const [accessState, setAccessState] = useState<AccessState>('loading');
+  const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
   const hasInitialUrlFilters =
     initialUrlViewState.filters.projects.length > 0 ||
     initialUrlViewState.filters.vendors.length > 0 ||
@@ -154,7 +160,66 @@ function App() {
   const activeFilterCount = activeFilters.projects.length + activeFilters.vendors.length + activeFilters.scopes.length;
 
   useEffect(() => {
-    fetchData();
+    let cancelled = false;
+
+    const applySessionState = async (session: Awaited<ReturnType<typeof supabase.auth.getSession>>['data']['session']) => {
+      const nextEmail = session?.user.email?.toLowerCase() ?? null;
+      if (cancelled) return;
+
+      setCurrentUserEmail(nextEmail);
+
+      if (!session || !nextEmail) {
+        setAccessState('signed_out');
+        return;
+      }
+
+      setAccessState('checking');
+
+      const { data, error: approvalError } = await supabase.rpc('get_my_app_access');
+      if (cancelled) return;
+
+      if (approvalError) {
+        setAuthError(approvalError.message);
+        setAccessState('signed_out');
+        return;
+      }
+
+      if (!data?.[0]?.is_active) {
+        setAccessState('unauthorized');
+        return;
+      }
+
+      setAccessState('approved');
+      setAuthError(null);
+      await fetchData();
+    };
+
+    const hydrateSession = async () => {
+      setAuthError(null);
+      const { data, error: sessionError } = await supabase.auth.getSession();
+      if (cancelled) return;
+
+      if (sessionError) {
+        setAuthError(sessionError.message);
+        setAccessState('signed_out');
+        return;
+      }
+
+      await applySessionState(data.session);
+    };
+
+    void hydrateSession();
+
+    const {
+      data: { subscription }
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      void applySessionState(session);
+    });
+
+    return () => {
+      cancelled = true;
+      subscription.unsubscribe();
+    };
   }, [fetchData]);
 
   useEffect(() => {
@@ -205,6 +270,99 @@ function App() {
     resetPersistedChartViewState();
     setChartResetKey((current) => current + 1);
   };
+
+  const handleLogOut = async () => {
+    try {
+      await supabase.auth.signOut();
+    } finally {
+      window.location.reload();
+    }
+  };
+
+  const handleSignInWithGoogle = async () => {
+    setAuthError(null);
+
+    const redirectTo = `${window.location.origin}${window.location.pathname}`;
+    const { error: signInError } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo,
+        queryParams: {
+          access_type: 'offline',
+          prompt: 'select_account'
+        }
+      }
+    });
+
+    if (signInError) {
+      setAuthError(signInError.message);
+    }
+  };
+
+  if (accessState === 'loading' || accessState === 'checking') {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-100">
+        <div className="rounded-3xl border border-slate-800 bg-slate-900/80 px-8 py-6 shadow-2xl">
+          <div className="flex items-center gap-3 text-slate-300">
+            <svg className="h-5 w-5 animate-spin text-cyan-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+            <span>{accessState === 'loading' ? 'Restoring session...' : 'Checking access...'}</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (accessState === 'signed_out') {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-950 px-6 text-slate-100">
+        <div className="w-full max-w-xl rounded-[2rem] border border-slate-800 bg-slate-900/85 p-10 shadow-[0_40px_120px_rgba(0,0,0,0.45)]">
+          <div className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-cyan-300 w-fit">
+            Phase 1 Access Control
+          </div>
+          <h1 className="mt-6 text-3xl font-semibold text-white">Residential Construction Manager</h1>
+          <p className="mt-4 text-base text-slate-300">
+            Sign in with an approved Google account to access the scheduling workspace and the branch database.
+          </p>
+          {authError && (
+            <div className="mt-6 rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+              {authError}
+            </div>
+          )}
+          <button
+            onClick={handleSignInWithGoogle}
+            className="mt-8 inline-flex items-center justify-center rounded-2xl bg-white px-5 py-3 text-sm font-semibold text-slate-900 transition hover:bg-slate-100"
+          >
+            Sign in with Google
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (accessState === 'unauthorized') {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-950 px-6 text-slate-100">
+        <div className="w-full max-w-xl rounded-[2rem] border border-slate-800 bg-slate-900/85 p-10 shadow-[0_40px_120px_rgba(0,0,0,0.45)]">
+          <div className="rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-amber-300 w-fit">
+            Access Restricted
+          </div>
+          <h1 className="mt-6 text-3xl font-semibold text-white">This Google account is not approved yet</h1>
+          <p className="mt-4 text-base text-slate-300">
+            Signed in as <span className="font-medium text-white">{currentUserEmail ?? 'unknown user'}</span>.
+          </p>
+          <button
+            onClick={handleLogOut}
+            className="mt-8 inline-flex items-center justify-center rounded-2xl border border-slate-700 bg-slate-900 px-5 py-3 text-sm font-semibold text-slate-200 transition hover:bg-slate-800"
+          >
+            Log out
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen bg-slate-900 text-slate-50 font-sans">
@@ -306,6 +464,14 @@ function App() {
                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:text-slate-500 disabled:shadow-none rounded-md font-medium text-sm transition-colors shadow-lg shadow-blue-500/20"
              >
                + Add Project
+             </button>
+             <button
+               onClick={handleLogOut}
+               className="inline-flex items-center gap-2 px-4 py-2 rounded-md font-medium text-sm transition-colors border border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-200"
+               title="Log out and restart the sign-in flow"
+             >
+               <LogOut size={16} />
+               <span>Log out</span>
              </button>
           </div>
         </header>

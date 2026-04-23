@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { clsx } from 'clsx';
 import { useShallow } from 'zustand/react/shallow';
-import { ArrowRight, FileText, GitBranch, Info, Layers3, Palette, Plus, Save, Trash2, X } from 'lucide-react';
+import { ArrowRight, FileText, GitBranch, Info, Layers3, Palette, Plus, Save, Trash2, UserRound, X } from 'lucide-react';
 import { useProjectStore } from '../store/projectStore';
 import { buildSubcontractorOptions } from '../utils/subcontractors';
+import { supabase } from '../lib/supabase';
 
-export type TemplateStudioTab = 'overview' | 'phases' | 'templates' | 'subcontractors' | 'dependencies';
+export type TemplateStudioTab = 'overview' | 'phases' | 'templates' | 'subcontractors' | 'dependencies' | 'users';
 
 type PhaseDraft = {
   name: string;
@@ -49,12 +50,23 @@ type PendingSubcontractorDraft = SubcontractorDraft & {
   localId: string;
 };
 
+type AppUser = {
+  id: string;
+  email: string;
+  role: string;
+  is_active: boolean;
+  created_at: string | null;
+};
+
+const PROTECTED_APP_USER_EMAILS = new Set(['jpwillett@gmail.com']);
+
 const STUDIO_TABS: { id: TemplateStudioTab; label: string; icon: typeof Info }[] = [
   { id: 'overview', label: 'Rules', icon: Info },
   { id: 'phases', label: 'Phases', icon: Layers3 },
   { id: 'templates', label: 'Scopes', icon: FileText },
   { id: 'subcontractors', label: 'Subs', icon: Palette },
-  { id: 'dependencies', label: 'Dependencies', icon: GitBranch }
+  { id: 'dependencies', label: 'Dependencies', icon: GitBranch },
+  { id: 'users', label: 'Users', icon: UserRound }
 ];
 
 function buildTemplateDrafts(
@@ -227,6 +239,10 @@ export function TemplateStudioModal({
   const [subcontractorDrafts, setSubcontractorDrafts] = useState<Record<string, SubcontractorDraft>>({});
   const [pendingSubcontractorCreates, setPendingSubcontractorCreates] = useState<PendingSubcontractorDraft[]>([]);
   const [pendingSubcontractorDeletes, setPendingSubcontractorDeletes] = useState<string[]>([]);
+  const [appUsers, setAppUsers] = useState<AppUser[]>([]);
+  const [isLoadingUsers, setIsLoadingUsers] = useState(false);
+  const [hasLoadedUsers, setHasLoadedUsers] = useState(false);
+  const [newUserEmail, setNewUserEmail] = useState('');
 
   const [newPhase, setNewPhase] = useState<PhaseDraft>({ name: '', phase_order: phaseTemplates.length + 1 });
   const [newSubcontractorName, setNewSubcontractorName] = useState('');
@@ -308,6 +324,12 @@ export function TemplateStudioModal({
       task_order: current.scope ? current.task_order : templates.length + 1
     }));
   }, [phaseTemplates, templates.length]);
+
+  useEffect(() => {
+    if (activeTab !== 'users' || hasLoadedUsers) return;
+
+    void loadAppUsers();
+  }, [activeTab, hasLoadedUsers]);
 
   const visiblePhaseTemplates = useMemo(() => {
     return phaseTemplates.filter((phase) => !pendingPhaseDeletes.includes(phase.id));
@@ -566,6 +588,44 @@ export function TemplateStudioModal({
       setBusyLabel(null);
     }
   };
+
+  const loadAppUsers = async () => {
+    setIsLoadingUsers(true);
+
+    try {
+      const { data, error } = await supabase.rpc('list_app_users');
+      if (error) throw error;
+
+      setAppUsers(
+        ((data as AppUser[] | null) ?? []).slice().sort((left, right) => left.email.localeCompare(right.email))
+      );
+      setHasLoadedUsers(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to load approved users.');
+    } finally {
+      setIsLoadingUsers(false);
+    }
+  };
+
+  const addAppUser = () =>
+    runAction('Added user', async () => {
+      const trimmedEmail = newUserEmail.trim().toLowerCase();
+      if (!trimmedEmail) throw new Error('Email address is required.');
+
+      const { error } = await supabase.rpc('add_app_user', { input_email: trimmedEmail });
+      if (error) throw error;
+
+      setNewUserEmail('');
+      await loadAppUsers();
+    });
+
+  const removeAppUser = (userId: string) =>
+    runAction('Removed user', async () => {
+      const { error } = await supabase.rpc('delete_app_user', { input_user_id: userId });
+      if (error) throw error;
+
+      await loadAppUsers();
+    });
 
   const dependencyDuplicate = useMemo(() => {
     return effectiveDependencies.some(
@@ -861,8 +921,7 @@ export function TemplateStudioModal({
           <aside className="w-64 border-r border-slate-800 bg-slate-950/80 p-5 flex flex-col">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <p className="text-[11px] uppercase tracking-[0.24em] text-cyan-400 font-semibold">Issue 7</p>
-                <h2 className="mt-2 text-xl font-semibold text-slate-100">Schedule Template Studio</h2>
+                <h2 className="text-xl font-semibold text-slate-100">Schedule Template Studio</h2>
                 <p className="mt-2 text-sm text-slate-400">
                   Edit the spreadsheet-backed scheduling baseline from inside the app.
                 </p>
@@ -916,6 +975,10 @@ export function TemplateStudioModal({
                 <div>
                   <div className="text-2xl font-semibold text-slate-100">{projects.length}</div>
                   <div className="text-sm text-slate-400">live projects loaded</div>
+                </div>
+                <div>
+                  <div className="text-2xl font-semibold text-slate-100">{appUsers.length}</div>
+                  <div className="text-sm text-slate-400">approved app users</div>
                 </div>
               </div>
             </div>
@@ -1619,6 +1682,94 @@ export function TemplateStudioModal({
                           </div>
                         );
                       })}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'users' && (
+                <div className="space-y-6">
+                  <div className="rounded-3xl border border-slate-800 bg-slate-950/60 p-6">
+                    <div className="text-[11px] uppercase tracking-[0.22em] text-cyan-400 font-semibold">Approved internal users</div>
+                    <p className="mt-2 text-sm text-slate-400">
+                      This allowlist controls which authenticated Google accounts can actually enter the app.
+                    </p>
+                    <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_160px]">
+                      <input
+                        type="email"
+                        value={newUserEmail}
+                        onChange={(event) => setNewUserEmail(event.target.value)}
+                        placeholder="name@company.com"
+                        className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-slate-100 focus:outline-none focus:border-cyan-500"
+                      />
+                      <button
+                        disabled={!newUserEmail.trim() || !!busyLabel}
+                        onClick={addAppUser}
+                        className="rounded-2xl bg-cyan-500/15 border border-cyan-500/30 px-4 py-3 font-medium text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center justify-center gap-2"
+                      >
+                        <Plus size={16} />
+                        Add User
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="rounded-3xl border border-slate-800 bg-slate-950/40 overflow-hidden">
+                    <div className="border-b border-slate-800 bg-slate-950/70 px-5 py-3">
+                      <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_120px_140px_120px]">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Email</div>
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Role</div>
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Status</div>
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Actions</div>
+                      </div>
+                    </div>
+                    <div className="divide-y divide-slate-800">
+                      {isLoadingUsers && (
+                        <div className="px-5 py-8 text-sm text-slate-400">Loading approved users...</div>
+                      )}
+                      {!isLoadingUsers && appUsers.length === 0 && (
+                        <div className="px-5 py-8 text-sm text-slate-400">No approved users found yet.</div>
+                      )}
+                      {!isLoadingUsers &&
+                        appUsers.map((appUser) => (
+                          <div key={appUser.id} className="p-5">
+                            {(() => {
+                              const isProtectedUser = PROTECTED_APP_USER_EMAILS.has(appUser.email.toLowerCase());
+
+                              return (
+                            <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_120px_140px_120px] lg:items-center">
+                              <div className="text-sm text-slate-100">{appUser.email}</div>
+                              <div className="text-sm text-slate-300">{appUser.role || 'member'}</div>
+                              <div>
+                                <span
+                                  className={clsx(
+                                    'inline-flex rounded-full border px-3 py-1 text-[11px] uppercase tracking-[0.18em]',
+                                    appUser.is_active
+                                      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+                                      : 'border-slate-600 bg-slate-800 text-slate-300'
+                                  )}
+                                >
+                                  {appUser.is_active ? 'Active' : 'Inactive'}
+                                </span>
+                              </div>
+                              <div className="flex justify-end">
+                                <button
+                                  disabled={!!busyLabel || isProtectedUser}
+                                  onClick={() => {
+                                    if (!confirm(`Remove "${appUser.email}" from the approved users list?`)) return;
+                                    void removeAppUser(appUser.id);
+                                  }}
+                                  className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 font-medium text-red-200 hover:bg-red-500/15 disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center justify-center gap-2"
+                                  title={isProtectedUser ? 'Primary admin access cannot be removed.' : 'Remove this user'}
+                                >
+                                  <Trash2 size={16} />
+                                  {isProtectedUser ? 'Protected' : 'Remove'}
+                                </button>
+                              </div>
+                            </div>
+                              );
+                            })()}
+                          </div>
+                        ))}
                     </div>
                   </div>
                 </div>
