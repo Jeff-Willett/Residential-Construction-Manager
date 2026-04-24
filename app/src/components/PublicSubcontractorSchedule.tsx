@@ -59,12 +59,14 @@ type ViewMode = 'standard' | 'compact' | 'calendar';
 type CalendarMonth = {
   key: string;
   label: string;
-  days: Array<{
-    key: string;
-    date: Date;
-    inMonth: boolean;
-    items: ScheduleItem[];
-  }>;
+  days: CalendarDay[];
+};
+
+type CalendarDay = {
+  key: string;
+  date: Date;
+  inMonth: boolean;
+  items: ScheduleItem[];
 };
 
 const formatDisplayDate = (value: string | null | undefined) => {
@@ -165,6 +167,7 @@ export function PublicSubcontractorSchedule() {
   const [tasks, setTasks] = useState<EngineTask[]>([]);
   const [selectedSubcontractor, setSelectedSubcontractor] = useState(readInitialSubcontractor);
   const [viewMode, setViewMode] = useState<ViewMode>(readInitialViewMode);
+  const [selectedCalendarDay, setSelectedCalendarDay] = useState<CalendarDay | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const today = useMemo(() => startOfDay(new Date()), []);
@@ -262,6 +265,10 @@ export function PublicSubcontractorSchedule() {
 
     const nextSearch = params.toString();
     window.history.replaceState(null, '', `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}`);
+  }, [selectedSubcontractor, viewMode]);
+
+  useEffect(() => {
+    setSelectedCalendarDay(null);
   }, [selectedSubcontractor, viewMode]);
 
   const projectById = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
@@ -565,10 +572,13 @@ export function PublicSubcontractorSchedule() {
                     </div>
                     <div className="grid grid-cols-7">
                       {month.days.map((day) => (
-                        <div
+                        <button
+                          type="button"
                           key={day.key}
+                          onClick={() => setSelectedCalendarDay(day)}
                           className={[
-                            'min-h-[70px] border-b border-r border-slate-800 p-1.5',
+                            'min-h-[70px] border-b border-r border-slate-800 p-1.5 text-left transition focus:outline-none focus:ring-2 focus:ring-cyan-400 focus:ring-inset',
+                            day.items.length > 0 ? 'cursor-pointer hover:bg-slate-800/80' : 'cursor-pointer hover:bg-slate-900/70',
                             day.inMonth ? 'bg-slate-950/20' : 'bg-slate-950/60 text-slate-700'
                           ].join(' ')}
                         >
@@ -590,7 +600,7 @@ export function PublicSubcontractorSchedule() {
                             ))}
                             {day.items.length > 2 && <div className="text-[10px] font-medium text-cyan-300">+{day.items.length - 2} more</div>}
                           </div>
-                        </div>
+                        </button>
                       ))}
                     </div>
                   </section>
@@ -604,6 +614,51 @@ export function PublicSubcontractorSchedule() {
       <footer className="px-4 pb-6 text-center text-xs text-slate-500 print:hidden">
         Read-only schedule view. Contact the project manager for schedule changes.
       </footer>
+
+      {selectedCalendarDay && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 px-4 py-6 backdrop-blur-sm print:hidden">
+          <button
+            type="button"
+            aria-label="Close day details"
+            className="absolute inset-0 cursor-default"
+            onClick={() => setSelectedCalendarDay(null)}
+          />
+          <button
+            type="button"
+            onClick={() => setSelectedCalendarDay(null)}
+            className="relative max-h-[80vh] w-full max-w-md overflow-y-auto rounded-lg border border-slate-700 bg-slate-900 p-4 text-left shadow-2xl"
+          >
+            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-300">
+              {format(selectedCalendarDay.date, 'EEEE')}
+            </div>
+            <h2 className="mt-1 text-xl font-semibold text-white">{format(selectedCalendarDay.date, 'MMMM d, yyyy')}</h2>
+
+            {selectedCalendarDay.items.length === 0 ? (
+              <div className="mt-4 rounded-md border border-slate-700 bg-slate-950/60 p-3 text-sm text-slate-300">
+                No scheduled work for this subcontractor.
+              </div>
+            ) : (
+              <div className="mt-4 flex flex-col gap-3">
+                {selectedCalendarDay.items.map((item) => (
+                  <div key={item.id} className="rounded-md border border-slate-700 bg-slate-950/60 p-3">
+                    <div className="text-base font-semibold text-white">{item.projectName}</div>
+                    <div className="mt-2 grid grid-cols-[80px_1fr] gap-x-3 gap-y-1 text-sm">
+                      <div className="text-slate-500">Phase</div>
+                      <div className="font-medium text-slate-200">{item.phase_name ?? 'Unphased'}</div>
+                      <div className="text-slate-500">Scope</div>
+                      <div className="font-medium text-slate-200">{item.name}</div>
+                      <div className="text-slate-500">Dates</div>
+                      <div className="font-medium text-slate-200">
+                        {formatCompactDate(item.calculated_start)} - {formatCompactDate(item.calculated_finish)}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
