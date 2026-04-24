@@ -13,7 +13,7 @@ import {
   startOfDay,
   startOfWeek
 } from 'date-fns';
-import { AlertTriangle, CalendarDays, Clock, Printer, RefreshCcw, UserRound } from 'lucide-react';
+import { AlertTriangle, CalendarDays, Clock, FolderKanban, Printer, RefreshCcw, UserRound, X } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { calculateScheduleEngine, type EngineTask, type Project } from '../utils/schedulingEngine';
 import { normalizeSubcontractorName } from '../utils/subcontractors';
@@ -168,6 +168,7 @@ export function PublicSubcontractorSchedule() {
   const [selectedSubcontractor, setSelectedSubcontractor] = useState(readInitialSubcontractor);
   const [viewMode, setViewMode] = useState<ViewMode>(readInitialViewMode);
   const [selectedCalendarDay, setSelectedCalendarDay] = useState<CalendarDay | null>(null);
+  const [calendarPopupOrigin, setCalendarPopupOrigin] = useState({ x: 50, y: 50 });
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const today = useMemo(() => startOfDay(new Date()), []);
@@ -348,6 +349,15 @@ export function PublicSubcontractorSchedule() {
       <div className="h-px flex-1 bg-red-500/70" />
     </div>
   );
+
+  const openCalendarDay = (day: CalendarDay, event: React.MouseEvent<HTMLButtonElement>) => {
+    const { innerWidth, innerHeight } = window;
+    setCalendarPopupOrigin({
+      x: Math.round((event.clientX / Math.max(innerWidth, 1)) * 100),
+      y: Math.round((event.clientY / Math.max(innerHeight, 1)) * 100)
+    });
+    setSelectedCalendarDay(day);
+  };
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 print:bg-white print:text-slate-950">
@@ -575,7 +585,7 @@ export function PublicSubcontractorSchedule() {
                         <button
                           type="button"
                           key={day.key}
-                          onClick={() => setSelectedCalendarDay(day)}
+                          onClick={(event) => openCalendarDay(day, event)}
                           className={[
                             'min-h-[70px] border-b border-r border-slate-800 p-1.5 text-left transition focus:outline-none focus:ring-2 focus:ring-cyan-400 focus:ring-inset',
                             day.items.length > 0 ? 'cursor-pointer hover:bg-slate-800/80' : 'cursor-pointer hover:bg-slate-900/70',
@@ -616,7 +626,7 @@ export function PublicSubcontractorSchedule() {
       </footer>
 
       {selectedCalendarDay && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 px-4 py-6 backdrop-blur-sm print:hidden">
+        <div className="calendar-day-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-6 backdrop-blur-[3px] print:hidden">
           <button
             type="button"
             aria-label="Close day details"
@@ -626,36 +636,55 @@ export function PublicSubcontractorSchedule() {
           <button
             type="button"
             onClick={() => setSelectedCalendarDay(null)}
-            className="relative max-h-[80vh] w-full max-w-md overflow-y-auto rounded-lg border border-slate-700 bg-slate-900 p-4 text-left shadow-2xl"
+            className="calendar-day-dialog relative max-h-[82vh] w-full max-w-md overflow-hidden rounded-xl border border-cyan-400/30 bg-slate-900 text-left shadow-[0_28px_90px_rgba(0,0,0,0.65),0_0_38px_rgba(34,211,238,0.12)] ring-1 ring-white/5"
+            style={{ transformOrigin: `${calendarPopupOrigin.x}% ${calendarPopupOrigin.y}%` }}
           >
-            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-300">
-              {format(selectedCalendarDay.date, 'EEEE')}
-            </div>
-            <h2 className="mt-1 text-xl font-semibold text-white">{format(selectedCalendarDay.date, 'MMMM d, yyyy')}</h2>
-
-            {selectedCalendarDay.items.length === 0 ? (
-              <div className="mt-4 rounded-md border border-slate-700 bg-slate-950/60 p-3 text-sm text-slate-300">
-                No scheduled work for this subcontractor.
+            <div className="border-b border-slate-700/80 bg-slate-950/70 px-4 py-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-cyan-300">
+                    <CalendarDays size={14} />
+                    {format(selectedCalendarDay.date, 'EEEE')}
+                  </div>
+                  <h2 className="mt-1 text-xl font-semibold leading-tight text-white">{format(selectedCalendarDay.date, 'MMMM d, yyyy')}</h2>
+                </div>
+                <div className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-700 bg-slate-900 text-slate-300">
+                  <X size={16} />
+                </div>
               </div>
-            ) : (
-              <div className="mt-4 flex flex-col gap-3">
-                {selectedCalendarDay.items.map((item) => (
-                  <div key={item.id} className="rounded-md border border-slate-700 bg-slate-950/60 p-3">
-                    <div className="text-base font-semibold text-white">{item.projectName}</div>
-                    <div className="mt-2 grid grid-cols-[80px_1fr] gap-x-3 gap-y-1 text-sm">
-                      <div className="text-slate-500">Phase</div>
-                      <div className="font-medium text-slate-200">{item.phase_name ?? 'Unphased'}</div>
-                      <div className="text-slate-500">Scope</div>
-                      <div className="font-medium text-slate-200">{item.name}</div>
-                      <div className="text-slate-500">Dates</div>
-                      <div className="font-medium text-slate-200">
-                        {formatCompactDate(item.calculated_start)} - {formatCompactDate(item.calculated_finish)}
+            </div>
+
+            <div className="max-h-[62vh] overflow-y-auto p-4">
+              {selectedCalendarDay.items.length === 0 ? (
+                <div className="rounded-lg border border-slate-700 bg-slate-950/60 p-4 text-sm text-slate-300">
+                  No scheduled work for this subcontractor.
+                </div>
+              ) : (
+                <div className="flex flex-col gap-3">
+                  <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 px-3 py-2 text-sm font-medium text-cyan-100">
+                    {selectedCalendarDay.items.length} scheduled item{selectedCalendarDay.items.length === 1 ? '' : 's'} on this day
+                  </div>
+                  {selectedCalendarDay.items.map((item) => (
+                    <div key={item.id} className="rounded-lg border border-slate-700 bg-slate-950/70 p-3 shadow-inner">
+                      <div className="flex items-center gap-2 text-base font-semibold text-white">
+                        <FolderKanban size={16} className="text-cyan-300" />
+                        {item.projectName}
+                      </div>
+                      <div className="mt-3 grid grid-cols-[72px_1fr] gap-x-3 gap-y-2 text-sm">
+                        <div className="text-slate-500">Phase</div>
+                        <div className="font-medium text-slate-200">{item.phase_name ?? 'Unphased'}</div>
+                        <div className="text-slate-500">Scope</div>
+                        <div className="font-medium text-slate-200">{item.name}</div>
+                        <div className="text-slate-500">Dates</div>
+                        <div className="font-medium text-slate-200">
+                          {formatCompactDate(item.calculated_start)} - {formatCompactDate(item.calculated_finish)}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
-              </div>
-            )}
+                  ))}
+                </div>
+              )}
+            </div>
           </button>
         </div>
       )}
