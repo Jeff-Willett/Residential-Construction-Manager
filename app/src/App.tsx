@@ -5,6 +5,7 @@ import { SidePanel } from './components/SidePanel';
 import { FilterModal } from './components/FilterModal';
 import { TemplateStudioModal, type TemplateStudioTab } from './components/TemplateStudioModal';
 import { AddProjectModal } from './components/AddProjectModal';
+import { PublicSubcontractorSchedule } from './components/PublicSubcontractorSchedule';
 import { Filter, LogOut, RotateCcw, RotateCw, FileText, ZoomIn, ZoomOut } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { supabase } from './lib/supabase';
@@ -125,7 +126,7 @@ const resetPersistedChartViewState = () => {
   window.localStorage.setItem(CHART_VIEW_STATE_STORAGE_KEY, JSON.stringify(resetState));
 };
 
-function App() {
+function AuthenticatedApp() {
   const { projects, tasks, isLoading, error, fetchData, activeFilters, setActiveFilters, undo, undoStack, redo, redoStack } = useProjectStore(
     useShallow((state) => ({
       projects: state.projects,
@@ -597,6 +598,17 @@ function App() {
       )}
     </div>
   );
+}
+
+function App() {
+  const isPublicSubcontractorRoute =
+    typeof window !== 'undefined' && window.location.pathname.replace(/\/+$/, '') === '/subs';
+
+  if (isPublicSubcontractorRoute) {
+    return <PublicSubcontractorSchedule />;
+  }
+
+  return <AuthenticatedApp />;
 }
 
 export default App;
