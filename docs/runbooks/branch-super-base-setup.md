@@ -50,7 +50,7 @@ Use this when creating or validating the second Supabase project for issue `#20`
 ## 6. Protect production
 
 - do not run `testing:refresh` against production except as an intentional recovery action
-- keep production snapshot and backup actions manual until the backup plan is implemented
+- keep production refresh/restore actions explicit and guarded
 - document who is allowed to use production service-role credentials
 
 ## 7. Verify the split
@@ -61,6 +61,4 @@ Use this when creating or validating the second Supabase project for issue `#20`
 
 ## Future follow-up
 
-- add scheduled production snapshot and backups
-- add a deliberate `production -> branch-super-base` refresh runbook
 - optionally add a dedicated script alias such as `testing:refresh:branch`

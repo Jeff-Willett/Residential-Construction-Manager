@@ -56,6 +56,63 @@ npm run testing:status -- \
 
 Then open the protected Vercel Preview deployment and confirm projects, schedules, templates, subcontractors, colors, and approved-user access behave as expected.
 
+## Refresh pre-production from a GitHub backup
+
+Use this when the request is like "refresh pre-production from production" or "refresh pre-production with yesterday's backup."
+
+1. Identify the desired backup run:
+
+```bash
+gh run list \
+  --repo Jeff-Willett/Residential-Construction-Manager \
+  --workflow backup-production.yml \
+  --limit 30
+```
+
+Prefer a `production-backup-daily-*` artifact for date-based requests such as yesterday. Use hourly artifacts when the request asks for a more specific point in time.
+
+2. Download the artifact:
+
+```bash
+rm -rf /tmp/rcgm-backup-restore
+mkdir -p /tmp/rcgm-backup-restore
+gh run download <run-id> \
+  --repo Jeff-Willett/Residential-Construction-Manager \
+  --name production-backup-daily-<run-id> \
+  --dir /tmp/rcgm-backup-restore
+```
+
+3. Restore only into `branch-super-base`:
+
+```bash
+node scripts/testing-data.mjs refresh \
+  --env branch-super-base \
+  --snapshot /tmp/rcgm-backup-restore/latest-production.json
+npm run testing:status -- \
+  --env branch-super-base \
+  --snapshot /tmp/rcgm-backup-restore/latest-production.json
+```
+
+The expected result is `Status: MATCH`.
+
+4. Verify Vercel Preview is wired to `branch-super-base` before sharing a pre-production link:
+
+- `VITE_SUPABASE_URL` must be the branch-super-base URL, currently project ref `qjsjsemxtmatlpmvsmoi`
+- `VITE_SUPABASE_ANON_KEY` must be the anon key from that same branch-super-base Supabase project
+- a mismatched URL/key pair causes Google sign-in to return `Invalid API key`
+
+If the Vercel Preview project env is stale or missing the branch anon key, deploy the pre-production preview with explicit build-time env values from `app/.env.local`:
+
+```bash
+URL=$(grep '^VITE_SUPABASE_URL=' app/.env.local | cut -d= -f2-)
+KEY=$(grep '^VITE_SUPABASE_ANON_KEY=' app/.env.local | cut -d= -f2-)
+npx vercel --yes --force \
+  --build-env VITE_SUPABASE_URL="$URL" \
+  --build-env VITE_SUPABASE_ANON_KEY="$KEY"
+```
+
+5. Open the resulting Vercel Preview URL and complete Google sign-in. Confirm the app opens to the schedule workspace, not the sign-in page, access-restricted page, or `Invalid API key` error.
+
 ## GitHub Secrets required
 
 Add these in Settings > Secrets and variables > Actions:
