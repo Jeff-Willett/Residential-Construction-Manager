@@ -40,6 +40,31 @@ type ResettableChartViewState = {
 
 type AccessState = 'loading' | 'signed_out' | 'checking' | 'approved' | 'unauthorized';
 
+const completeOAuthSessionFromHash = async () => {
+  if (typeof window === 'undefined' || !window.location.hash.includes('access_token=')) {
+    return null;
+  }
+
+  const params = new URLSearchParams(window.location.hash.slice(1));
+  const accessToken = params.get('access_token');
+  const refreshToken = params.get('refresh_token');
+
+  if (!accessToken || !refreshToken) {
+    return null;
+  }
+
+  const { data, error } = await supabase.auth.setSession({
+    access_token: accessToken,
+    refresh_token: refreshToken
+  });
+
+  if (!error) {
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
+  }
+
+  return { session: data.session, error };
+};
+
 const getEnvironmentLabel = () => {
   if (import.meta.env.DEV) return 'local testing';
   if (APP_VERCEL_ENV === 'production') return 'production';
@@ -205,6 +230,20 @@ function AuthenticatedApp() {
 
     const hydrateSession = async () => {
       setAuthError(null);
+      const callbackResult = await completeOAuthSessionFromHash();
+      if (cancelled) return;
+
+      if (callbackResult?.error) {
+        setAuthError(callbackResult.error.message);
+        setAccessState('signed_out');
+        return;
+      }
+
+      if (callbackResult?.session) {
+        await applySessionState(callbackResult.session);
+        return;
+      }
+
       const { data, error: sessionError } = await supabase.auth.getSession();
       if (cancelled) return;
 
