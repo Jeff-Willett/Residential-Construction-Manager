@@ -15,7 +15,9 @@ const tableConfigs = [
   { name: 'project_phases', orderBy: 'phase_order.asc', deleteFilter: 'id=not.is.null' },
   { name: 'tasks', orderBy: 'id.asc', deleteFilter: 'id=not.is.null' },
   { name: 'dependencies', orderBy: 'id.asc', deleteFilter: 'id=not.is.null' },
+  { name: 'subcontractors', orderBy: 'name.asc', deleteFilter: 'id=not.is.null' },
   { name: 'vendor_colors', orderBy: 'vendor_name.asc', deleteFilter: 'vendor_name=not.is.null' },
+  { name: 'app_users', orderBy: 'email.asc', deleteFilter: 'id=not.is.null' },
 ];
 
 const deleteOrder = [
@@ -26,7 +28,9 @@ const deleteOrder = [
   'task_templates',
   'phase_templates',
   'projects',
+  'subcontractors',
   'vendor_colors',
+  'app_users',
 ];
 
 const insertOrder = [
@@ -37,7 +41,9 @@ const insertOrder = [
   'project_phases',
   'tasks',
   'dependencies',
+  'subcontractors',
   'vendor_colors',
+  'app_users',
 ];
 
 const command = process.argv[2];
@@ -302,6 +308,15 @@ function loadSnapshot(snapshotPath) {
   }
 
   const snapshot = JSON.parse(readFileSync(snapshotPath, 'utf8'));
+  const missingTables = tableConfigs
+    .map((table) => table.name)
+    .filter((tableName) => !Object.hasOwn(snapshot.tables || {}, tableName));
+  if (missingTables.length > 0) {
+    throw new Error(
+      `Snapshot is missing required tables: ${missingTables.join(', ')}. Use a newer complete backup before refreshing.`
+    );
+  }
+
   const normalizedTables = Object.fromEntries(
     Object.entries(snapshot.tables || {}).map(([tableName, rows]) => [tableName, normalizeRows(rows || [])])
   );
